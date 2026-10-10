@@ -149,13 +149,16 @@ $script:binContexts = [System.Collections.Generic.List[string]]::new()
 function Send([string]$text, [string]$label) {
     $body = @{ model = $model; messages = @(@{ role = 'user'; content = $text }); max_tokens = 1; stream = $false } | ConvertTo-Json -Depth 6 -Compress
     $bf = Join-Path $tmp 'r.json'; $of = Join-Path $tmp 'o.json'
-    Set-Content -Path $bf -Value $body -Encoding utf8
+    # 必须写「无 BOM」的 UTF-8：PowerShell 5.1 的 -Encoding utf8 会带 BOM，
+    # 而带 BOM 的 JSON 在严格的后端/网关看来就是非法请求体 —— 那种 400 会被
+    # 误当成「命中触发词」，把二分引向根本不存在的片段。
+    [System.IO.File]::WriteAllText($bf, $body, (New-Object System.Text.UTF8Encoding($false)))
     $code = & curl.exe -s -m 30 -o $of -w '%{http_code}' -X POST $endpoint `
         -H "Authorization: Bearer $key" -H 'Content-Type: application/json' --data "@$bf" 2>$null
     $msg = 'OK'
     if ($code -ne '200') {
         try {
-            $j = Get-Content $of -Raw | ConvertFrom-Json
+            $j = Get-Content $of -Raw -Encoding UTF8 | ConvertFrom-Json
             $msg = ($j.error.message -split "`n")[0]
             if (-not $msg) { $msg = '(unparsed body)' }
         } catch { $msg = '(unparsed body)' }
@@ -215,8 +218,33 @@ function Resolve-Boundary([string]$parent, [string]$leftPart, [int]$depth) {
     }
 
     if (-not $slice) {
-        Write-Host ('  >>> 上下文组合触发（非连续片段）: [' + $parent + ']') -ForegroundColor Magenta
-        $script:binContexts.Add($parent) | Out-Null
+        # 走到这里说明「指数量级的边界扫描」没找到更小的连续片段。
+        # 补两个决定性探测：长度 n-1 的前缀与后缀 —— 若存在更短的连续触发片段 W，
+        # W 不可能同时含首尾字符，故必然整个落在其中一个窗口里；而触发对超集单调，
+        # 那个窗口必然也触发。两个都不触发 ⇒ 不存在更短的连续触发片段。
+        if ($n -ge 2) {
+            $pfx = $parent.Substring(0, $n - 1)
+            $r = Send $pfx 'shrink-prefix'
+            if ($r.Code -eq '400') { Invoke-Binary $pfx ($depth + 1) | Out-Null; return $true }
+            $sfx = $parent.Substring(1)
+            $r = Send $sfx 'shrink-suffix'
+            if ($r.Code -eq '400') { Invoke-Binary $sfx ($depth + 1) | Out-Null; return $true }
+            # 再分机制：删掉中间一个字符后仍触发 ⇒ 两个分离片段共同作用；
+            # 删掉就不触发 ⇒ 整段字符缺一不可（最小连续片段就是整段）。
+            $mid = [int][Math]::Floor($n / 2)
+            $mutant = $parent.Substring(0, $mid) + $parent.Substring($mid + 1)
+            $r = Send $mutant 'middle-delete'
+            if ($r.Code -eq '400') {
+                Write-Host ('  >>> 上下文组合触发（两个分离片段共同作用）: [' + $parent + ']') -ForegroundColor Magenta
+                $script:binContexts.Add($parent) | Out-Null
+            } else {
+                Write-Host ('  >>> 最小连续片段（整段字符缺一不可）: [' + $parent + ']') -ForegroundColor Yellow
+                $script:binHits.Add($parent) | Out-Null
+            }
+        } else {
+            Write-Host ('  >>> 命中: [' + $parent + ']') -ForegroundColor Yellow
+            $script:binHits.Add($parent) | Out-Null
+        }
         return $true
     }
 

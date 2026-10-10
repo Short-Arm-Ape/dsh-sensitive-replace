@@ -1,5 +1,5 @@
 /**
- * dsh-sensitive-replace — 敏感字符在「进上下文 + 出网前」两个关口自动替换（v0.6.2）
+ * dsh-sensitive-replace — 敏感字符在「进上下文 + 出网前」两个关口自动替换（v0.7.0）
  *
  * 背景：DeepSeek 官方 API 内容审核对特定字符（部分 emoji 码位组合等）硬命中——
  * 请求上下文只要含它即返回 400 "Content Exists Risk"。本插件按
@@ -76,6 +76,19 @@
  * "[BLOCKED]" 占位（纯 ASCII），明示内容被屏蔽而非静默删除。**本仓库任何文件
  * （含 tests / samples / 文档示例）都不含真实屏蔽词**，一律用编造占位符。
  *
+ * ── v0.7.0：写错形态不再静默失效 + 规则级命中计数 ──────────────────────────
+ * 1. `parseBlocklist` 现在把「语法合法但语义写错」的形态记进 `warnings`：顶层杂键、
+ *    `providers.models`（`models:` 写成与 provider 键同级）、provider 下直接写模型名、
+ *    `global`/`providers`/`models` 类型不对、数字/布尔条目没加引号、`re:` 正则无效，
+ *    以及兜底的「该 provider 一条规则都没解析出来」。加载/热重载时逐条写进运行日志，
+ *    并出现在 `sensitive_replace_status.warningList` 与 `replace_sensitive` 的 note 里。
+ *    警告只报位置与形态，不复制规则/正则文本。
+ * 2. `sensitive_replace_status` 新增 `ruleHits`：每条规则（`ruleIndex` 的编号顺序）
+ *    的累计命中次数与最近命中距今秒数，`scope` 为它在文件里的位置；只给编号，
+ *    不含规则文本。用于确认「新加的规则有没有在真实流量里命中」。
+ * 3. `replaceText` / `replaceBlocksCopy` / `replaceMessageCopy` / `scrubRequest`
+ *    新增可选 `sink(rule, count)` 回调（不传＝行为与 0.6.2 一致）。
+ *
  * ── v0.6.2：仅打包与文档（无行为变化）─────────────────────────────────────
  * 仓库公开前的清理：测试与文档示例里的真实屏蔽表内容 / 本机标识一律换成编造的
  * 占位符（本仓库任何文件都不含真实屏蔽词）；`npm test` 修好；补 LICENSE /
@@ -101,7 +114,7 @@ import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-ll
 export declare const name = "agent-sensitive-replace";
 export declare const inject: readonly ["tools"];
 /** 本构建版本，随 package.json 同步；经 sensitive_replace_status 暴露 */
-export declare const PLUGIN_VERSION = "0.6.2";
+export declare const PLUGIN_VERSION = "0.7.0";
 export interface Config {
     /** 插件总开关 */
     enabled: boolean;
@@ -166,7 +179,12 @@ export interface Blocklist {
     exists: boolean;
     /** YAML 解析错误（有错时表为空，自动面空转） */
     parseError?: string;
-    /** 非致命警告（如 re: 正则无效被跳过） */
+    /**
+     * 非致命警告（v0.7.0 起覆盖"语法合法但语义写错"的形态：顶层杂键、
+     * `providers.models`、provider 下直接写模型名、类型不对、非字符串条目、
+     * `re:` 正则无效，以及"该 provider 一条规则都没解析出来"）。
+     * 只报位置与形态，不含规则/正则文本；加载与热重载时会逐条写进运行日志。
+     */
     warnings?: string[];
 }
 /** 单个 provider（或前缀族）的规则条目：基础列表 + 按模型分键（模型键尾 '*' 为前缀模式） */
@@ -186,8 +204,11 @@ export declare function loadBlocklist(path: string, cached: Blocklist | null): B
  * replaceWith 含 {n} 时按规则序号（1 起：global 在前、当前 provider 在后）编号，
  * 便于按屏蔽表还原原文；条目以 re: 开头按正则编译（无效正则跳过，不中断其它规则）。
  * hits 仅在启用编号且实际命中时返回（undefined 键不发——平台 lossless-JSON 契约）。
+ *
+ * v0.7.0：可选 `sink(rule, count)` —— 每命中一条规则回调一次，供调用方做规则级
+ * 计数（自动面的 `ruleHits` 就是它累计的）。不传时行为与 0.6.2 完全一致。
  */
-export declare function replaceText(text: string, rules: string[], replaceWith: string): {
+export declare function replaceText(text: string, rules: string[], replaceWith: string, sink?: RuleHitSink): {
     text: string;
     count: number;
     hits?: Array<{
@@ -206,6 +227,8 @@ export declare function countText(text: string, rules: string[]): number;
  */
 export declare function replaceBlocksCopy(blocks: readonly ContentBlock[], rules: string[], replaceWith: string, opts?: {
     toolCallArguments?: boolean;
+    /** v0.7.0：规则级计数回调（透传给 replaceText） */
+    sink?: RuleHitSink;
 }): {
     blocks: ContentBlock[];
     count: number;
@@ -213,14 +236,17 @@ export declare function replaceBlocksCopy(blocks: readonly ContentBlock[], rules
 /**
  * 出网前清洗整份请求（v0.5.0）：messages（含 tool-call 参数）与 system 全部拷贝替换。
  * 不改动入参（请求是深冻结的），无命中时返回原对象与 count=0。
+ * v0.7.0：可选 `sink(rule, count)` 用于规则级计数。
  */
-export declare function scrubRequest(options: GenerateOptions, rules: string[], replaceWith: string): {
+export declare function scrubRequest(options: GenerateOptions, rules: string[], replaceWith: string, sink?: RuleHitSink): {
     options: GenerateOptions;
     count: number;
 };
 /** 非原地替换一条消息：无命中返回原消息（同一引用），有命中返回保留 id 的新冻结消息 */
 export declare function replaceMessageCopy<T extends Message>(msg: T, rules: string[], replaceWith: string, opts?: {
     toolCallArguments?: boolean;
+    /** v0.7.0：规则级计数回调（透传给 replaceText） */
+    sink?: RuleHitSink;
 }): {
     message: T;
     count: number;
@@ -240,4 +266,18 @@ export declare function scanOptions(options: GenerateOptions, rules: string[]): 
 export declare function providerRules(bl: Blocklist, provider: string | undefined, model?: string | undefined): string[];
 /** 取某 provider（+模型）的生效规则（全局 ∪ 该 Provider ID/模型专属规则） */
 export declare function rulesFor(bl: Blocklist, provider: string | undefined, model?: string | undefined): string[];
+/** v0.7.0 规则级计数回调：每命中一条规则回报一次（`rule` 只在进程内使用，不外发） */
+export type RuleHitSink = (rule: string, count: number) => void;
+/** v0.7.0 规则编号表：去重后按出现顺序（global → 各 provider 的 `_` → `models`） */
+export interface RuleIndex {
+    /** 规则文本的顺序表（`index + 1` 即对外编号） */
+    order: string[];
+    /** 规则文本 → 它在文件里的位置（如 `global` / `providers.<id>` / `providers.<id>/models.<m>`） */
+    scopeOf: Map<string, string>;
+}
+/**
+ * 构造规则编号表（v0.7.0）。编号只用于把「哪条规则在起作用」说清楚：
+ * `sensitive_replace_status.ruleHits` 的 `n` 就是这个编号，`scope` 是 `scopeOf` 的值。
+ */
+export declare function ruleIndex(bl: Blocklist): RuleIndex;
 export declare function apply(ctx: Context, config: Config): void;

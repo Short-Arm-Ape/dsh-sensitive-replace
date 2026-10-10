@@ -1,5 +1,57 @@
 # dsh-sensitive-replace — 变更记录
 
+## v0.7.0（写错形态不再静默失效 + 规则级命中计数）
+
+1. **屏蔽表「语法合法但语义写错」的形态改为显式告警**。此前只有 YAML 语法错误
+   （`parseError`）与无效 `re:` 正则会报，另外几种写错法一律静默失效 ——
+   用户以为规则在防抖、实际一条都没生效。现在 `parseBlocklist` 会记录：
+   顶层出现 `global` / `providers` 之外的键、`providers.models`（把 `models:`
+   写成了与 provider 键同级）、provider 下直接写模型名、`global` / `providers` /
+   `models` 类型不对、条目不是字符串（数字/布尔没加引号）、`re:` 正则无效，
+   以及兜底的「这个 provider 一条规则都没解析出来」。
+   - 加载与**热重载**时逐条写进运行日志（`屏蔽表警告: …`；按
+     `mtime|警告数|解析错误` 去重，只在版本变化时打，不刷屏）；
+   - `sensitive_replace_status` 新增 `warningList`，`replace_sensitive` 的
+     `note` 也带上；
+   - 警告只报**位置与形态**（`global 第 N 条` / `providers.<id>.models.<model>`），
+     不复制规则或正则文本 —— 警告本身不该成为泄露面。
+2. **规则级命中计数**：`sensitive_replace_status` 新增 `ruleHits` —— 每条规则的
+   累计命中次数与最近命中距今秒数，`scope` 指明它在文件里的位置。编号规则：
+   去重后按出现顺序（先 `global`，再按文件顺序遍历 `providers`：每个 provider
+   先 `_` 基础规则、再 `models` 各模型键）。用途：确认「新加的规则到底有没有在
+   真实流量里命中」，不必再发测试消息。**仍然不返回任何屏蔽词内容**，只给编号。
+3. **API 向后兼容的扩展**：`replaceText` / `replaceBlocksCopy` /
+   `replaceMessageCopy` / `scrubRequest` 新增可选 `sink(rule, count)` 回调
+   （不传则行为与 0.6.2 完全一致），自动面（`agent/pre-step`、
+   `tools/post-execute`、`llm/stream`）用它做上述计数。新增导出 `ruleIndex`。
+4. **新增 Linux / macOS 版探测脚本 `content-risk-interactive.sh`**：与
+   `content-risk-interactive.ps1` 功能对齐（single / batch / binary 三模式、
+   `mode`/`model`/`file`/`h`/`q` 命令），依赖只有 bash 4+ 与 curl（不需要
+   jq / python）。相对 PS1 多三处：① 非交互开关 `-t/-T/-f/-s/-n/-b` 与退出码
+   （0 未触发 / 2 触发 400 / 3 网络失败 / 4 用法缺参），便于脚本化；
+   ② 二分收尾补「长度 n-1 的前缀与后缀」两个决定性探测 + 「删掉中间一个字符」
+   机制判定，从而把「最小连续片段（整段缺一不可）」与「上下文组合触发（两个
+   分离片段共同作用）」分开报（PS1 会把前者也报成组合触发）；
+   ③ 切片对齐 UTF-8 字符边界（locale 非多字节时先尝试用 UTF-8 locale 重跑自己，
+   否则用 iconv 校验），避免切出半个汉字/emoji 造成假 400。
+   该脚本用假服务端做了 18 项验收（含多字节、无空格长串、组合触发、批量只中间
+   一个词命中、网络不可达、缺 key 不挂起等）。
+5. **PowerShell 探测脚本 `content-risk-interactive.ps1` 两处修复**（都在真实 PowerShell 5.1 +
+   假服务端上复现并验证过）：
+   - **二分收尾的误判**：对"整段字符缺一不可"的连续触发片段也会报成「上下文组合触发」。
+     现补上「长度 n-1 的前缀/后缀」两个决定性探测与「删掉中间一个字符」的机制判定，
+     与 Linux 版报法一致（最小连续片段 / 两个分离片段共同作用）。
+   - **请求体带 BOM**：旧版用 `Set-Content -Encoding utf8`（PS 5.1 会写 UTF-8 BOM），
+     带 BOM 的 JSON 在严格的后端/网关看来是非法请求体，其 400 会被误当成"命中触发词"——
+     假阳性会把二分引向不存在的片段。改为 `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))`
+     写无 BOM 的 UTF-8；读响应也显式按 UTF-8 读。
+6. **文档**：补「替换是单向的、插件不提供还原」的明确说明与平台限制依据
+   （`PreToolDecision` 无改参、会话事件 append-only）；
+   新增《与同类插件的关系》（与 dsh-text-guard 的逐项对比，并说明为什么不需要
+   另挂 `tools/ptc-dispatch-log` —— 子分发结果写该日志前已经过
+   `tools/post-execute`）；补两个探测脚本的用法说明。
+7. **测试**：新增 `tests/v070.test.mjs`（8 条），全量 46 条。
+
 ## v0.6.2（仓库公开前的清理；无行为变化）
 
 代码路径与 v0.6.1 完全一致，只动打包与文档：

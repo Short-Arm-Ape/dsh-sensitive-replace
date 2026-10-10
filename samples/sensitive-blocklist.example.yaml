@@ -1,4 +1,4 @@
-# 敏感字符屏蔽表示例（dsh-sensitive-replace v0.6.2 · 按 Provider ID / 模型匹配）
+# 敏感字符屏蔽表示例（dsh-sensitive-replace v0.7.0 · 按 Provider ID / 模型匹配）
 # 复制为 $DSH_HOME/sensitive-blocklist.yaml（默认 ~/.dsh；Windows 为 %DSH_HOME%）
 # 后按需编辑；保存即生效（mtime 热重载）。
 # ⚠ 本示例不含真实敏感词：global 里放的是一个「随机低碰撞占位符」，

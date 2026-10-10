@@ -1,10 +1,13 @@
 # dsh-sensitive-replace
 
-敏感字符自动替换插件（v0.6.2）：按**用户自行维护的屏蔽表文档**，在**内容进入会话上下文之前**、以及**请求出网之前**两个关口把命中字符替换为占位符，
+敏感字符自动替换插件（v0.7.0）：按**用户自行维护的屏蔽表文档**，在**内容进入会话上下文之前**、以及**请求出网之前**两个关口把命中字符替换为占位符，
 从源头规避 DeepSeek 官方 API 的 `Content Exists Risk` 400（根因：特定字符如部分 emoji 码位组合单独出现即命中官方审核）。
 真出了 400 也能自动加硬清洗并重试，**对话与上下文保持连续**。
+替换是**单向且不可逆**的（详见[能力与边界](#能力与边界务必读)）；屏蔽表写错的形态会在加载期明确告警，不再静默失效。
 
 本包是一个 **DSH Profile Bundle**（`package.json` 里声明 `dsh.bundle.patch`），装进 profile 即自动挂载，不需要手写组合行。
+
+**同类项目**：生态里已有 [dsh-text-guard](https://github.com/7771sd/dsh-text-guard) 等同类插件，差异见[与同类插件的关系](#与同类插件的关系)。
 
 ---
 
@@ -19,7 +22,7 @@
 dsh plugin --profile web add dsh-sensitive-replace
 
 # 用本地构建产物 / tarball
-dsh plugin --profile web add /abs/path/dsh-sensitive-replace-0.6.2.tgz
+dsh plugin --profile web add /abs/path/dsh-sensitive-replace-0.7.0.tgz
 ```
 
 `dsh plugin` 本质是在 profile 目录里跑 pnpm，并在装完后把「声明了 `dsh.bundle` 的依赖」自动并入 `dsh.profile.bundles` 层栈。
@@ -32,7 +35,7 @@ dsh plugin --profile web add /abs/path/dsh-sensitive-replace-0.6.2.tgz
 不想用 bundle 机制时：
 
 ```bash
-npm install /abs/path/dsh-sensitive-replace-0.6.2.tgz     # 或放进 profile 的依赖里
+npm install /abs/path/dsh-sensitive-replace-0.7.0.tgz     # 或放进 profile 的依赖里
 ```
 
 然后在 profile 的 `cordis.patch.yml`（用户 patch 层）里加一行：
@@ -129,7 +132,44 @@ llm/stream(options, next)
 - 图片/文件附件（二进制，不参与文本替换）；
 - 命中内容如果**不在**屏蔽表里，就不会被替换 —— 这是 400 的来源。此时 `recoverOn400` 会兜底（加硬清洗 + 重试），但它只剥离 emoji/符号一类码位；治本还是把词加进屏蔽表。
 
-诊断：`sensitive_replace_status` 工具（只读）给出规则数、各关口清洗次数、最近一次出网前替换处数、是否处于加硬清洗、400 自动恢复次数。
+**替换是单向的，插件不提供还原**（挂之前先想清楚）：
+
+- 关口 1/2 的替换发生在内容**写入会话日志之前**，所以日志里存下来的就是占位符；原文只存在于你的原始输入或外部数据源里，插件不会再写回去。
+- 关口 3 只替换**发往 provider 的那一份副本**，会话日志保持原文（这是有意的，见[安全约定](#安全约定)）。因此同一个会话里，你看到的可能是原文、模型看到的是占位符 —— 两边**故意不一致**。
+- 平台目前没有给插件「执行前改写 tool-call 参数」或「展示前改写助手文本」的合法挂点（`PreToolDecision` 只有 `allow` / `deny` / `cancel` / `ask`，不含改参；会话事件 append-only 且深冻结），所以占位符一旦落进日志或工具参数，就会**原样执行、原样展示**。
+- 需要事后对回原文时，用 `replaceWith: '[BLOCKED:{n}]'` + 工具返回的 `hits` 明细，按屏蔽表当前文件**人工**对照；插件不会自动还原。
+
+诊断：`sensitive_replace_status` 工具（只读）给出规则数、各关口清洗次数、最近一次出网前替换处数、是否处于加硬清洗、400 自动恢复次数，
+以及**每条规则的命中次数**（只给编号 / 位置 / 次数 / 距今秒数，不含规则文本：编号规则见[形态](#形态)）和**屏蔽表形态警告明细**。
+
+---
+
+## 与同类插件的关系
+
+解决同一个 400 的插件不止一个，最接近的是 [dsh-text-guard](https://github.com/7771sd/dsh-text-guard)（作者 7771sd，MIT）。
+两者思路一致（都在内容进日志前中和），差别在覆盖面与运维方式：
+
+| 能力 | 本插件 | dsh-text-guard |
+|---|---|---|
+| 进日志前中和（`agent/pre-step` / `tools/post-execute`） | ✅ | ✅ |
+| `run_code` 子分发日志副本（`tools/ptc-dispatch-log`） | 不需单独挂（子分发结果写该日志前已经过 `tools/post-execute`，见下） | ✅ 另挂一道 |
+| **出网前整份请求清洗**（`llm/stream`）：历史消息、模型自己写过的内容、tool-call 参数、**system prompt** | ✅ | ❌（其 README 把"system prompt 里的文本"列为已知盲区） |
+| **400 自动恢复**（加硬清洗 + 同会话 retry） | ✅ | ❌ |
+| 目标形态 | 用户维护的 YAML 屏蔽表（字形 / `\u{XXXX}` / `re:` 正则），global → Provider ID → 模型三级链 | 配置里的码位序列（`regional-pairs` 或 `exact`） |
+| 改配置后 | 保存即生效（按 mtime 热重载） | 需重新挂载 bundle |
+| 诊断面 | `sensitive_replace_status`（计数 + 每条规则命中 + 形态警告）、`replace_sensitive`（手动清洗任意文本） | 无 |
+
+**关于 `tools/ptc-dispatch-log`**：本插件没有单独挂它，因为 `run_code` 的子分发结果是**先过 `tools/post-execute`、再写日志**的 ——
+`dsh-tools` 的 `commit()` 先 `scheduler.finalize()`（= 跑 post-execute）拿到结果，之后 `settle()` 才用这份结果写 `tool/ptc-dispatch` 事件，
+所以子分发内容不会绕过第二道关口。要自行核对，看 `dsh-tools/lib/index.js` 里的 `finalizeScheduledExecution` 与 `shapeDispatchLog` 两条路径即可。
+
+一句话选型：只要**码位级、零配置**的方案（专治 emoji/旗帜一类码位）用 dsh-text-guard 更轻；
+要**出网前兜底（含历史内容与 system prompt）+ 400 自动恢复 + 可热改的屏蔽表**就用本插件。
+两者同时挂不冲突（规则各自独立），但没必要 —— 本插件覆盖了它除那道冗余挂点之外的全部能力。
+
+生态里还有一批**目标不同**的插件：PII / 凭据脱敏（`dsh-privmask`、`dsh-privacy-protector`）、
+屏蔽文件读取（[Yazzyk/dsh-file-shield](https://github.com/Yazzyk/dsh-file-shield)）、隐私掩码（[Huauauaa/dsh-privacy-mask](https://github.com/Huauauaa/dsh-privacy-mask)）等 ——
+它们回答的是"不想让模型看到什么"，本插件回答的是"什么会让官方 API 400"。
 
 ---
 
@@ -176,10 +216,35 @@ providers:
 > ⚠ **这页最容易写错的三种写法**（都真实踩过，注意对照）：
 >
 > 1. **数组形态里再缩进写 `models:`** —— YAML 直接报错 `bad indentation`（序列里不能放映射键）。只有基础规则时用数组 `deepseek-official: [ '词A' ]`；要按模型细分就必须改成对象形态、基础规则放 `_` 下（如上例）。
-> 2. **`models:` 与 `deepseek-official:` 同级** —— 会被解析成**另一个 provider**（id 就叫 `models`），里面的条目**静默失效**：不报错、不警告、永不命中。
-> 3. **模型键写成显示名/厂商名/猜的版本号** —— 必须写本机真实的 `options.model`（如 `deepseek-flash`）；用 `deepseek-v4-flash`、`deepseek-ai/*` 这类猜的键会静默不匹配。
+> 2. **`models:` 与 `deepseek-official:` 同级** —— 会被解析成**另一个 provider**（id 就叫 `models`），里面的条目**永不命中**。v0.7.0 起这种形态会在加载期明确告警（旧版是静默失效）。
+> 3. **模型键写成显示名/厂商名/猜的版本号** —— 必须写本机真实的 `options.model`（如 `deepseek-flash`）；用 `deepseek-v4-flash`、`deepseek-ai/*` 这类猜的键不会命中（v0.7.0 起，若该 provider 因此一条规则都没解析出来，也会告警）。
 >
 > 另外记住：**精确键命中后不再回落到前缀键**（设计行为）。所以同一个 model 上，`models` 里写了精确键时，同族的前缀键不会再生效——想验证前缀键，换一个没有精确键的 model 试。
+
+#### 写错形态会告警（v0.7.0）
+
+屏蔽表的**语法错误**（YAML 解析不了）一直是显式的：记 `parseError`、自动面空转、日志与工具面都提示。
+但**语法合法、语义写错**的形态过去是**静默失效**的 —— 用户以为规则在防抖，实际一条都没生效。v0.7.0 起这类形态会变成警告：
+
+- 在**加载/热重载时打进运行日志**（`屏蔽表警告: …`，每条一行，只在屏蔽表版本变化时打，不刷屏）；
+- 同时出现在 `sensitive_replace_status` 的 `warningList` 与 `replace_sensitive` 的 `note` 里。
+
+覆盖的形态：顶层出现 `global` / `providers` 之外的键（`models:` 写错位置会被点名）、`providers.models` 被当成 provider id、
+provider 下直接写模型名、`global` / `providers` / `models` 类型不对、条目不是字符串（数字/布尔没加引号）、`re:` 正则无效、
+以及兜底的"这个 provider 一条规则都没解析出来"。警告只报**位置与形态**，不复制规则内容。
+
+#### 规则编号（`sensitive_replace_status` 里的 `ruleHits.n`）
+
+去重后按**出现顺序**编号：先是 `global` 的条目，再按文件顺序遍历 `providers`（每个 provider 先 `_` 基础规则、再 `models` 下的各模型键）。
+同一段规则文本在文件里出现多次时只占一个编号，计数合并到首次出现的位置。
+有了它就能回答"我新加的那条规则到底有没有在真实流量里命中"，而不用发测试消息：
+
+```text
+ruleHits: [ { n: 3, scope: 'providers.deepseek-official/models.deepseek-flash', count: 12, lastAgoS: 40 } ]
+```
+
+`n` = 编号（0 表示该规则已从屏蔽表里删掉，或来自 400 加硬清洗的内置规则），`scope` = 它在文件里的位置，`count` = 累计命中次数，`lastAgoS` = 距今多少秒。
+**不含规则文本**，可安全贴给别人看。
 
 ### 条目写法
 
@@ -199,7 +264,9 @@ providers:
 ## 工具面
 
 - `replace_sensitive` —— 手动清洗任意文本；`provider` / `model` 缺省只套全局规则，指定时叠加对应专属规则；返回清洗后文本、替换计数与命中明细（`hits`）。
-- `sensitive_replace_status` —— 只读诊断：规则数、各关口清洗次数、最近一次出网前替换处数、是否处于加硬清洗、400 自动恢复次数。**不返回任何屏蔽词内容**，可安全用于确认"出网前清洗是否真的在工作"。
+- `sensitive_replace_status` —— 只读诊断：规则数、各关口清洗次数、最近一次出网前替换处数、是否处于加硬清洗、400 自动恢复次数、
+  **每条规则的命中次数**（`ruleHits`：编号 / 位置 / 次数 / 距今秒数）与**屏蔽表形态警告明细**（`warningList`）。
+  **不返回任何屏蔽词内容**（规则只以编号出现），可安全用于确认"出网前清洗是否真的在工作"、以及"新加的规则有没有真的命中"。
 
 ---
 
@@ -233,7 +300,7 @@ npm install          # 装运行依赖 js-yaml 与 peer（cordis / schemastery /
 npm test             # 等价于裸 `node --test`
 ```
 
-裸 `node --test`（自动发现 `tests/` 下的用例；**别用** `node --test tests/` 或 `node --test tests`——Node 会把目录当模块入口，直接报 `MODULE_NOT_FOUND`；也别用 `node --test test/*.test.mjs` 这类通配写法——不通配展开的 shell 会跑 0 个用例假绿）。四个文件：
+裸 `node --test`（自动发现 `tests/` 下的用例；**别用** `node --test tests/` 或 `node --test tests`——Node 会把目录当模块入口，直接报 `MODULE_NOT_FOUND`；也别用 `node --test test/*.test.mjs` 这类通配写法——不通配展开的 shell 会跑 0 个用例假绿）。五个文件：
 
 > 仓库内所有用例的 provider / model 键与规则条目都是**编造的占位符**，不含真实屏蔽词。
 
@@ -241,8 +308,9 @@ npm test             # 等价于裸 `node --test`
 - `tests/features-v040.test.mjs`（8 条）：模型精确 / 模型前缀 / 未命中只基础、显式空模型键防回落、Provider 前缀族内按模型、正则命中 + 无效正则记警告、`{n}` 编号占位符 + `hits` 明细、默认无 `hits`、`global` 在前、旧数组形态等价。
 - `tests/auto-v041.test.mjs`（14 条）：用假 ctx 捕获真实注册的监听器来驱动 —— `agent/pre-step` 替换且**保留消息 id / 不原地改写**、无命中与 `reject` 原样透传、空表不介入；`tools/post-execute` 替换 content 与 `tool-result` 嵌套块、value / block 形态不动；路由追踪（`agent/request` 之后套用专属规则、`agent/disposed` 后回到只 global）；开关组合、坏屏蔽表不抛；以及**根因回归**（对 `dsh-llm` 工厂产出的真实深冻结消息同样能清洗）。
 - `tests/outbound-v050.test.mjs`（8 条）：`scrubRequest` 覆盖 text/reasoning/tool-result/tool-call 参数/system 且不动原请求、保留消息 id；tool-call 参数的 JSON 安全性（占位符含引号也不破 JSON）；`llm/stream` 命中时**不调用 next、直接续到 `adapterStream`**、无命中时放行、`dispatchScrub=false` 退回只读扫描；`agent/request-error` 的 400→retry、非 400 放行、超上限放弃；400 之后**规则外的 emoji 也被加硬清洗剥离**。
+- `tests/v070.test.mjs`（8 条）：形态警告（`models:` 写错位置、顶层杂键、`global` 类型错、provider 下直接写模型名、非字符串条目只报一次、合法文档零警告）；规则编号顺序；`replaceText` 的 `sink` 回调与向后兼容；三道关口的命中落到对应规则编号且**状态输出里不含规则文本**；热重载后警告进运行日志。
 
-期望结果：**tests 38 / pass 38 / fail 0**（EXIT=0）。
+期望结果：**tests 46 / pass 46 / fail 0**（EXIT=0）。
 
 ### 30 秒手测（链路是否真通）
 
@@ -260,9 +328,66 @@ npm test             # 等价于裸 `node --test`
 
 ---
 
+## 配套工具：找出"到底哪个字符触发 400"
+
+仓库根目录带两个等价的探测脚本，用于**找出到底是哪些字符让官方 API 返回 400**（本插件最初的屏蔽表就是这么定位出来的）。
+它们直接打 `chat/completions`（`max_tokens: 1`），三种模式：
+
+| 模式 | 用途 |
+|---|---|
+| `single` | 输入一个词、回车即发 —— 快速验证"这个词是不是触发词" |
+| `batch` | 一行按空格分词逐个发 —— 一次过筛一批候选 |
+| `binary` | 多行输入、单独一行 `END` 提交 —— 命中后**自动二分 + 边界重定位**，把长文收敛到最小触发片段 |
+
+| 平台 | 脚本 | 依赖 |
+|---|---|---|
+| Windows | `content-risk-interactive.ps1` | PowerShell（Windows 自带 `curl.exe`） |
+| Linux / macOS | `content-risk-interactive.sh` | `bash` 4+ 与 `curl`（不需要 jq / python） |
+
+Windows：
+
+```powershell
+$env:DSK_PROBE_KEY = '你的 API key'      # 也可不设，脚本会提示输入
+pwsh -File .\content-risk-interactive.ps1
+```
+
+Linux / macOS（脚本没带执行位也可以直接 `bash` 跑）：
+
+```bash
+export DSK_PROBE_KEY=sk-...
+bash content-risk-interactive.sh                                   # 交互模式
+bash content-risk-interactive.sh -m deepseek-flash -t '待测文本'      # 单发
+bash content-risk-interactive.sh -m deepseek-flash -b -t '长文本…'    # 二分（非交互，可直接进脚本/CI）
+bash content-risk-interactive.sh -m deepseek-flash -f ./可疑摘录.txt
+bash content-risk-interactive.sh -e https://your-gateway/v1/chat/completions -m deepseek-flash -t hi
+```
+
+交互模式两版通用：`mode single|batch|binary` 切模式、`model <名>` 切模型、`file <路径> [起始] [长度]` 发送文件切片、`h` 帮助、`q` 退出。
+Linux 版另有非交互开关 `-t`（单发）/`-T`（批量）/`-f`（文件，配 `-s` 起始、`-n` 长度）/`-b`（二分），退出码：
+`0` = 未触发（HTTP 200）、`2` = 触发 400、`3` = 网络或其它失败、`4` = 用法 / key 缺失。
+
+两版的判定是一致的（v0.7.0 起 PS1 也补上了）：二分收尾都会用长度 n-1 的前缀/后缀确认"不存在更短的连续触发片段"，
+再删掉中间一个字符看是否仍然触发，从而把 `最小连续片段（整段字符缺一不可）` 与 `上下文组合触发（两个分离片段共同作用）` 分开报。
+平台差异只有两处：Linux 版带非交互开关与退出码（便于脚本化），并把切片对齐到 UTF-8 字符边界
+（locale 不支持多字节时先尝试用 UTF-8 locale 重跑自己，否则用 `iconv` 校验边界），
+避免切出半个汉字/emoji 导致请求本身非法、从而产生**假 400**。
+
+> ⚠ 用 v0.7.0 之前的 PS1 探测过的话，结论值得复查一遍：旧版用 `Set-Content -Encoding utf8` 写请求体，
+> 在 PowerShell 5.1 上会带上 **BOM**，而带 BOM 的 JSON 在严格的网关/后端看来是非法请求体 ——
+> 它回的 400 与 `Content Exists Risk` 的 400 长得一样，会被当成"命中触发词"，把二分引向不存在的片段。
+> 现在请求体写成无 BOM 的 UTF-8（与 Linux 版行为一致）。
+
+两个脚本都**不内置任何屏蔽词、不内置 key、不写任何配置文件**：key 只从 `$DSK_PROBE_KEY` 或现场输入取（Linux 版还支持 `-k`，但会警告它留在 shell 历史里），
+命中的片段只打印在你的终端里（别把含命中片段的输出贴到公开处）。
+它们是独立工具，不参与插件运行；不需要就删掉（`package.json` 的 `files` 里没有它们，npm 包不会带上）。
+
+---
+
 ## 安全约定
 
-源码 / 日志 / 输出不携带屏蔽字符字形，只以码位、计数与规则序号出现；替换位为纯 ASCII 占位符（默认 `[BLOCKED]`），明示内容被屏蔽而非静默删除。**本仓库任何文件（含 `tests/`、`samples/`、README 与类型注释里的示例）都不含真实屏蔽词** —— 示例一律用随机低碰撞占位符（`blocklist-check-…`）或编造的 provider / model 键；真实屏蔽表只存在于使用者本机 `$DSH_HOME/sensitive-blocklist.yaml`，发布包可放心分发。
+源码 / 日志 / 输出不携带屏蔽字符字形，只以码位、计数与规则序号出现；替换位为纯 ASCII 占位符（默认 `[BLOCKED]`），明示内容被屏蔽而非静默删除。**本仓库任何文件（含 `tests/`、`samples/`、README、两个 `content-risk-interactive.*` 探测脚本与类型注释里的示例）都不含真实屏蔽词** —— 示例一律用随机低碰撞占位符（`blocklist-check-…`）或编造的 provider / model 键；真实屏蔽表只存在于使用者本机 `$DSH_HOME/sensitive-blocklist.yaml`，发布包可放心分发。
+
+> 这段是可核对的说法，不是口号：仓库内的规则条目、provider / model 键与码位示例都可以逐条读；`sensitive_replace_status` 的 `ruleHits` / `warningList` 也只给编号、位置与次数，不含条目文本。
 
 > 也就是说：**出网前那道清洗不写日志、也不回填日志** —— 日志里保留原文，只有发往 provider 的那一份被替换。
 > 这是有意的：不改写会话日志的"可重建"语义，人类看到的对话记录也保持完整。
@@ -270,6 +395,25 @@ npm test             # 等价于裸 `node --test`
 ---
 
 ## 版本变更
+
+### 0.7.0
+
+- **屏蔽表写错的形态不再静默失效**：`parseBlocklist` 现在会记录「语法合法但语义写错」的形态（顶层杂键、`providers.models`
+  被当成 provider id、provider 下直接写模型名、`global`/`providers`/`models` 类型不对、数字/布尔条目没加引号、
+  以及"这个 provider 一条规则都没解析出来"），并在**加载/热重载时逐条打进运行日志**；`sensitive_replace_status`
+  新增 `warningList`，`replace_sensitive` 的 `note` 也会带上。警告只报位置与形态，不复制规则内容。
+- **规则级命中计数**：`sensitive_replace_status` 新增 `ruleHits` —— 每条规则（按文件出现顺序编号）的累计命中次数与
+  距今秒数，`scope` 指明它在文件里的位置。可用来确认"新加的规则到底有没有在真实流量里命中"，而不必发测试消息。
+  仍然**不返回任何屏蔽词内容**（只给编号）。
+- `replaceText` / `replaceBlocksCopy` / `replaceMessageCopy` / `scrubRequest` 新增可选的 `sink(rule, count)` 回调
+  （不传则行为与 v0.6.2 完全一致），自动面用它做上述计数。
+- 无效 `re:` 正则的警告文案改为**只报位置**（`global 第 N 条` / `providers.<id>.models.<model> 第 N 条`），
+  不再把正则模式文本复制进警告 —— 避免警告本身成为泄露面。
+- 文档：补「替换不可逆」的明确说明、与同类插件（dsh-text-guard 等）的差异对比、探测脚本用法。
+- **新增 Linux / macOS 版探测脚本 `content-risk-interactive.sh`**：与 PowerShell 版功能对齐（single / batch / binary），
+  另有非交互开关与退出码（便于脚本化），二分收尾多两条判定以区分「整段缺一不可」与「两个分离片段共同作用」，
+  并把切片对齐到 UTF-8 字符边界以免产生假 400。
+- 新增 `tests/v070.test.mjs`（8 条），全量 46 条。
 
 ### 0.6.2
 
