@@ -1,0 +1,48 @@
+# 敏感字符屏蔽表示例（dsh-sensitive-replace v0.6.2 · 按 Provider ID / 模型匹配）
+# 复制为 $DSH_HOME/sensitive-blocklist.yaml（默认 ~/.dsh；Windows 为 %DSH_HOME%）
+# 后按需编辑；保存即生效（mtime 热重载）。
+# ⚠ 本示例不含真实敏感词：global 里放的是一个「随机低碰撞占位符」，
+#   用于自测链路是否打通（命中即替换为 [BLOCKED]），验证完可删或换用你自己的屏蔽词。
+
+# ── 匹配模式（v0.4.x）────────────────────────────────────────────────────
+# 三级匹配链（从宽到窄，全部生效叠加）：
+#   global                       → 对任何 Provider ID 生效
+#   providers.<id>               → Provider ID 精确 = DSH 的 provider 路由 id
+#                                  （如 deepseek-official）；键尾 '*' 为前缀模式
+#   providers.<id>.models.<m>    → 再按模型细分；模型键尾 '*' 为前缀模式
+# 条目写法：普通字符串 = 字面量（支持 \u{XXXX} 码位）；'re:...' = 正则
+# （无效正则跳过并记警告，不中断其它规则）；
+# replaceWith 配 {n} 时替换为带序号占位符（如 [BLOCKED:3]）便于还原原文。
+
+global:
+  - 'blocklist-check-9f3a8c21e7'   # 随机低碰撞占位符：自测用，命中即链路通
+
+providers:
+  # ── 这页最容易写错的三种写法（都有人踩过，务必对照）──────────────────────
+  #   ① 简单形态：只要基础规则 → 值直接写数组
+  #        deepseek-official: [ '词A' ]
+  #   ② 进阶形态：基础规则 + 按模型细分 → 必须用对象形态，基础规则放 `_` 键下
+  #        deepseek-official:
+  #          _:
+  #            - '词A'                # 该 Provider 所有模型共用
+  #          models:
+  #            '模型id': [ '词B' ]     # 只对该模型生效；键尾 '*' 为前缀模式
+  #   ✗ 数组形态后再缩进写 `models:` → YAML 直接报错 bad indentation
+  #     （序列里不能放映射键；插件会提示「YAML 解析失败」并在工具结果里给 note）
+  #   ✗ `models:` 写成与 `deepseek-official:` 同级 → 被当成另一个 provider
+  #     （id 就叫 `models`），里面的条目**静默失效**：不报错、不警告、永不命中
+  #   另外：模型键要写**本机真实 model id**（如 deepseek-flash），不是厂商/显示名；
+  #   精确键命中后不再回落到前缀键（这是设计行为）。
+  #
+  # DeepSeek 官方源（provider 路由 id = deepseek-official）专属规则示例。
+  # 下面用进阶形态（对象 + `_`），既给出基础规则也给出按模型的示例。
+  deepseek-official:
+    _:
+      - '示例词A'                 # 该 Provider 所有模型共用的基础规则
+    models:
+      'deepseek-flash':           # 精确：某台机器上真实的 model id
+        - '只对该模型生效的示例'
+      'deepseek-*':               # 前缀模式：一族模型共用（多命中取最长前缀）
+        - '对该模型前缀族生效的示例'
+    # 正则条目示例（re: 前缀，大小写敏感；无效正则跳过并记警告）：
+    #   - 're:机密[0-9]{2,}'

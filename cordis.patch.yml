@@ -1,0 +1,28 @@
+# dsh-sensitive-replace — DSH profile bundle patch.
+#
+# Installing this package as a profile dependency is enough:
+#
+#   dsh plugin --profile <profile> add dsh-sensitive-replace
+#   # or from a local build/tarball:
+#   dsh plugin --profile <profile> add /abs/path/dsh-sensitive-replace-<version>.tgz
+#
+# The profile loader composes this patch after the shipped bundles. `./lib/index.js`
+# is rewritten to a file URL anchored beside this file, so the row points at the
+# installed copy wherever the profile's package manager put it — no name guessing
+# and no manual row needed.
+#
+# Override any field by row id from your own profile cordis.patch.yml (applied
+# after every bundle layer, last write wins):
+#
+#   - id: sensitive-replace
+#     config:
+#       enabled: true
+#       autoReplace: true
+#       detectUnfiltered: true
+#       blocklistPath: /abs/path/to/sensitive-blocklist.yaml
+#       replaceWith: '[BLOCKED]'
+#
+# To uninstall: dsh plugin --profile <profile> remove dsh-sensitive-replace
+- insert:
+    - id: sensitive-replace
+      name: './lib/index.js'

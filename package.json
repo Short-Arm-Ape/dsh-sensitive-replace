@@ -1,0 +1,64 @@
+{
+  "name": "dsh-sensitive-replace",
+  "version": "0.6.2",
+  "description": "敏感字符自动替换：按用户维护的 YAML 屏蔽表（全局 / 按 Provider ID / 模型，默认 $DSH_HOME/sensitive-blocklist.yaml）在内容进入会话上下文前替换命中字符，规避 DeepSeek 官方 Content Exists Risk 400（v0.6.2：兼容 DSH 0.2.0-rc.x，无需版本豁免；仅打包与文档变化）",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "samples",
+    "tests",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT",
+  "author": "Short-Arm-Ape",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Short-Arm-Ape/dsh-sensitive-replace.git"
+  },
+  "homepage": "https://github.com/Short-Arm-Ape/dsh-sensitive-replace#readme",
+  "bugs": {
+    "url": "https://github.com/Short-Arm-Ape/dsh-sensitive-replace/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "cordis-plugin",
+    "plugin",
+    "sensitive-words",
+    "blocklist",
+    "content-exists-risk"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6 || ^0.2.0-rc.1"
+  },
+  "dependencies": {
+    "js-yaml": "^4.3.2"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
