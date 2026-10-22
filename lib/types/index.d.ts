@@ -1,5 +1,5 @@
 /**
- * dsh-sensitive-replace — 敏感字符在「进上下文 + 出网前」两个关口自动替换（v0.7.0）
+ * dsh-sensitive-replace — 敏感字符在「进上下文 + 出网前」两个关口自动替换（v0.7.1）
  *
  * 背景：DeepSeek 官方 API 内容审核对特定字符（部分 emoji 码位组合等）硬命中——
  * 请求上下文只要含它即返回 400 "Content Exists Risk"。本插件按
@@ -76,6 +76,14 @@
  * "[BLOCKED]" 占位（纯 ASCII），明示内容被屏蔽而非静默删除。**本仓库任何文件
  * （含 tests / samples / 文档示例）都不含真实屏蔽词**，一律用编造占位符。
  *
+ * ── v0.7.1：屏蔽表缺失时自动建空表 ───────────────────────────────────────
+ * 过去屏蔽表文件不存在只会静默空转（"自动面空转"），用户不知道该往哪填。
+ * 现在挂载时发现文件不存在就写一张空表模板（`BLOCKLIST_TEMPLATE`：只有结构说明与
+ * `global: []` / `providers: {}`，不含任何屏蔽词），日志里写明路径。
+ * 约束：`wx` 独占创建，已在用的文件一字不动；创建失败（权限/路径非法）只告警、
+ * 不抛异常，插件照常运行（规则为空）。可用 `createBlocklistIfMissing: false` 关掉。
+ * 顺带：`sensitive_replace_status` 增加 `blocklistExists`。
+ *
  * ── v0.7.0：写错形态不再静默失效 + 规则级命中计数 ──────────────────────────
  * 1. `parseBlocklist` 现在把「语法合法但语义写错」的形态记进 `warnings`：顶层杂键、
  *    `providers.models`（`models:` 写成与 provider 键同级）、provider 下直接写模型名、
@@ -114,7 +122,7 @@ import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-ll
 export declare const name = "agent-sensitive-replace";
 export declare const inject: readonly ["tools"];
 /** 本构建版本，随 package.json 同步；经 sensitive_replace_status 暴露 */
-export declare const PLUGIN_VERSION = "0.7.0";
+export declare const PLUGIN_VERSION = "0.7.1";
 export interface Config {
     /** 插件总开关 */
     enabled: boolean;
@@ -140,6 +148,8 @@ export interface Config {
     maxRecoveries: number;
     /** 屏蔽表文档路径（缺省 $DSH_HOME/sensitive-blocklist.yaml） */
     blocklistPath: string;
+    /** 文件不存在时自动创建空表模板（默认 true；已存在的文件绝不覆盖） */
+    createBlocklistIfMissing: boolean;
     /** 替换占位符（默认 [BLOCKED]：明示内容被屏蔽，防思维链从空删除反推原文） */
     replaceWith: string;
 }
@@ -154,6 +164,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     aggressive: z<boolean, boolean>;
     maxRecoveries: z<number, number>;
     blocklistPath: z<string, string>;
+    createBlocklistIfMissing: z<boolean, boolean>;
     replaceWith: z<string, string>;
 }>, Schemastery.ObjectT<{
     enabled: z<boolean, boolean>;
@@ -166,6 +177,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     aggressive: z<boolean, boolean>;
     maxRecoveries: z<number, number>;
     blocklistPath: z<string, string>;
+    createBlocklistIfMissing: z<boolean, boolean>;
     replaceWith: z<string, string>;
 }>>;
 /** 屏蔽表：全局规则 + 按 provider 的规则表 */
@@ -199,6 +211,18 @@ export declare function decodeEscapes(s: string): string;
 export declare function parseBlocklist(text: string, mtimeMs: number): Blocklist;
 /** 读屏蔽表文档（带 mtime 缓存，变化才重读） */
 export declare function loadBlocklist(path: string, cached: Blocklist | null): Blocklist;
+/** v0.7.1：自动创建用的空表模板（只有结构说明与空列表，不含任何屏蔽词） */
+export declare const BLOCKLIST_TEMPLATE: string;
+/**
+ * v0.7.1：屏蔽表不存在就建一张空表。`wx` 独占创建（绝不覆盖已有文件）、
+ * 父目录一并创建、任何失败都只回报原因而不抛异常。
+ * @returns `created` 是否本次新建；`exists` 结束后文件是否存在；`reason` 原因码（`missing` / `exists` / 错误文本）
+ */
+export declare function ensureBlocklist(path: string, template?: string): {
+    created: boolean;
+    exists: boolean;
+    reason: string;
+};
 /**
  * 替换一段文本，返回新文本与命中次数（重复命中逐次计数）。
  * replaceWith 含 {n} 时按规则序号（1 起：global 在前、当前 provider 在后）编号，

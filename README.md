@@ -48,8 +48,14 @@ npm install /abs/path/dsh-sensitive-replace-0.7.0.tgz     # 或放进 profile �
 
 ### 之后：准备屏蔽表
 
-把 `samples/sensitive-blocklist.example.yaml` 复制为 `$DSH_HOME/sensitive-blocklist.yaml`
-（`$DSH_HOME` 默认 `~/.dsh`；Windows 上是 `%DSH_HOME%`，默认 `%USERPROFILE%\.dsh`；可用 config `blocklistPath` 覆盖）。
+**不用自己建文件**：插件启动时发现屏蔽表不存在，会直接写一张空表模板
+（`$DSH_HOME/sensitive-blocklist.yaml`，`$DSH_HOME` 默认 `~/.dsh`；Windows 上是 `%DSH_HOME%`，默认 `%USERPROFILE%\.dsh`；
+可用 config `blocklistPath` 覆盖），文件里带格式说明，把要屏蔽的字符填进去保存就生效。
+要更完整的示例（三级匹配、`re:` 正则、模型前缀模式）可以照 `samples/sensitive-blocklist.example.yaml` 抄。
+
+- **绝不覆盖**：文件已存在时插件一字不动（用 `wx` 独占创建）；
+- **建不了也不影响启动**：权限/路径有问题时只在日志里告警，插件照常运行（规则为空）；
+- 不想让它建文件就设 `createBlocklistIfMissing: false`，此时文件缺失的行为回到「静默空转」并在日志说明。
 
 **保存即生效**：屏蔽表按文件 mtime 热重载，增删词无需重启。
 
@@ -182,6 +188,7 @@ llm/stream(options, next)
   - `global:` —— 对所有 Provider ID 生效的字符列表（最通用）
   - `providers:` 下按 Provider ID 分键 —— 键 = **DSH 的 provider 路由 id**（即请求 `options.provider`，如 `deepseek-official`）
 - **保存即生效**：按文件 mtime 热重载，增删屏蔽项无需重启
+- **文件不存在会自动建空表**（v0.7.1）：启动时写一份带说明的空表模板，不覆盖已有文件；建不出来只告警不报错
 
 ```yaml
 # 敏感字符屏蔽表（支持注释）
@@ -283,6 +290,7 @@ ruleHits: [ { n: 3, scope: 'providers.deepseek-official/models.deepseek-flash', 
 | aggressive | boolean | false | 常开加硬清洗（不等 400 也额外剥离 emoji / 符号） |
 | maxRecoveries | number | 2 | 10 分钟窗口内最多自动重试几次（防 400 循环） |
 | blocklistPath | string | `$DSH_HOME/sensitive-blocklist.yaml` | 屏蔽表文档路径 |
+| createBlocklistIfMissing | boolean | true | 文件不存在时自动创建空表模板（已存在绝不覆盖；失败只告警） |
 | replaceWith | string | `[BLOCKED]` | 替换占位符——含 `{n}` 时按规则序号编号（便于还原），明示内容被屏蔽而非静默删除 |
 
 `replaceWith` 用进 `tool-call` 参数时会自动做 JSON 转义，不会把参数弄成非法 JSON。
@@ -383,6 +391,31 @@ Linux 版另有非交互开关 `-t`（单发）/`-T`（批量）/`-f`（文件�
 
 ---
 
+## 故障排查
+
+**`dsh: failed to read overlay …/dsh-sensitive-replace/cordis.patch.yml: ENOENT`（启动就挂）**
+
+这条不是屏蔽表的问题，而是**装进 profile 的那份包不完整**（`cordis.patch.yml` 没了）：
+DSH 读到 `package.json` 的 `dsh.bundle.patch` 指向 `./cordis.patch.yml`，去包目录里找却找不到，于是启动失败。
+本包的 `files` 里含该文件，`npm pack` 出来的包里一定有它 —— 所以出现这个错，说明那份包本身缺文件
+（常见于手工组装过包目录、或用旧产物解包后只拷了一部分）。
+
+```bash
+# ① 看那份包里到底有没有这个文件
+ls "$DSH_HOME"/profiles/<profile>/node_modules/dsh-sensitive-replace/cordis.patch.yml
+# ② 有就用当前版本覆盖重装；急用可以先卸掉让 DSH 起来
+dsh plugin --profile <profile> remove dsh-sensitive-replace
+dsh plugin --profile <profile> add /abs/path/dsh-sensitive-replace-0.7.1.tgz
+```
+
+自己打的包也可以先 `npm pack --dry-run` 看一眼：文件列表里应当有 `cordis.patch.yml`。
+
+**插件装上了、屏蔽表却是空的**：v0.7.1 起启动时若文件不存在会自动建一张空表模板，日志里有
+`屏蔽表不存在 → 已创建空表模板: <路径>`；照那个路径填规则即可。若文件确实存在但一条规则都没加载，
+看 `sensitive_replace_status` 的 `warningList`（形态写错会明确告警）与 `blocklistExists`。
+
+---
+
 ## 安全约定
 
 源码 / 日志 / 输出不携带屏蔽字符字形，只以码位、计数与规则序号出现；替换位为纯 ASCII 占位符（默认 `[BLOCKED]`），明示内容被屏蔽而非静默删除。**本仓库任何文件（含 `tests/`、`samples/`、README、两个 `content-risk-interactive.*` 探测脚本与类型注释里的示例）都不含真实屏蔽词** —— 示例一律用随机低碰撞占位符（`blocklist-check-…`）或编造的 provider / model 键；真实屏蔽表只存在于使用者本机 `$DSH_HOME/sensitive-blocklist.yaml`，发布包可放心分发。
@@ -395,6 +428,16 @@ Linux 版另有非交互开关 `-t`（单发）/`-T`（批量）/`-f`（文件�
 ---
 
 ## 版本变更
+
+### 0.7.1
+
+- **屏蔽表缺失不再是一片空白**：启动时若 `blocklistPath` 指向的文件不存在，就写一张**空表模板**
+  （只有结构说明与 `global: []` / `providers: {}`，不含任何屏蔽词），并在日志里写明路径 ——
+  用户不用猜文件该放哪、该长什么样。约束：`wx` 独占创建，**绝不覆盖**已有文件；父目录不存在会一并创建；
+  创建失败（权限/路径非法）**只告警、不抛异常**，插件照常运行（规则为空）。开关 `createBlocklistIfMissing`（默认 true）。
+- `sensitive_replace_status` 增加 `blocklistExists`，一眼看出到底是"表是空的"还是"表没读到"。
+- 新增 `ensureBlocklist()` / `BLOCKLIST_TEMPLATE` 两个导出，便于脚本侧复用同一份模板。
+- 新增 `tests/v071.test.mjs`（8 条），全量 54 条。
 
 ### 0.7.0
 
