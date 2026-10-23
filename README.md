@@ -1,11 +1,13 @@
 # dsh-sensitive-replace
 
-敏感字符自动替换插件（v0.7.0）：按**用户自行维护的屏蔽表文档**，在**内容进入会话上下文之前**、以及**请求出网之前**两个关口把命中字符替换为占位符，
+敏感字符自动替换插件（v0.7.2）：按**用户自行维护的屏蔽表文档**，在**内容进入会话上下文之前**、以及**请求出网之前**两个关口把命中字符替换为占位符，
 从源头规避 DeepSeek 官方 API 的 `Content Exists Risk` 400（根因：特定字符如部分 emoji 码位组合单独出现即命中官方审核）。
 真出了 400 也能自动加硬清洗并重试，**对话与上下文保持连续**。
 替换是**单向且不可逆**的（详见[能力与边界](#能力与边界务必读)）；屏蔽表写错的形态会在加载期明确告警，不再静默失效。
 
 本包是一个 **DSH Profile Bundle**（`package.json` 里声明 `dsh.bundle.patch`），装进 profile 即自动挂载，不需要手写组合行。
+
+**在哪能拿到**：npm [`dsh-sensitive-replace`](https://www.npmjs.com/package/dsh-sensitive-replace) · GitHub [Short-Arm-Ape/dsh-sensitive-replace](https://github.com/Short-Arm-Ape/dsh-sensitive-replace) · Gitee [Short_Arm_Ape/dsh-sensitive-replace](https://gitee.com/Short_Arm_Ape/dsh-sensitive-replace)（镜像，同步 GitHub 的 main）。
 
 **同类项目**：生态里已有 [dsh-text-guard](https://github.com/7771sd/dsh-text-guard) 等同类插件，差异见[与同类插件的关系](#与同类插件的关系)。
 
@@ -15,14 +17,10 @@
 
 前置：DSH（`dsh` CLI 在 PATH 上）、profile 名（默认 `web`）。
 
-### 方式一：从 npm / tarball 装（推荐）
+### 方式一：从 npm 装（推荐）
 
 ```bash
-# 已发布到 registry 时
 dsh plugin --profile web add dsh-sensitive-replace
-
-# 用本地构建产物 / tarball
-dsh plugin --profile web add /abs/path/dsh-sensitive-replace-0.7.0.tgz
 ```
 
 `dsh plugin` 本质是在 profile 目录里跑 pnpm，并在装完后把「声明了 `dsh.bundle` 的依赖」自动并入 `dsh.profile.bundles` 层栈。
@@ -30,12 +28,37 @@ dsh plugin --profile web add /abs/path/dsh-sensitive-replace-0.7.0.tgz
 
 装完重启该 profile（`dsh web` 的 profile 若开着 `patchReload: live`，改 patch 层可热生效；新增依赖仍建议重启一次）。
 
-### 方式二：作为普通 npm 依赖 + 手写一行
+### 方式二：直接从 Git 仓装（GitHub / Gitee）
+
+不想走 npm 时，直接装仓库源码也行——本包 `lib/` 是入库的，**没有构建步骤**：
+
+```bash
+# GitHub（pnpm 的 github: 简写；可加 #<tag 或 commit> 钉版本，生产环境建议钉）
+dsh plugin --profile web add github:Short-Arm-Ape/dsh-sensitive-replace#v0.7.2
+
+# Gitee（国内镜像：走完整 git 地址）
+dsh plugin --profile web add git+https://gitee.com/Short_Arm_Ape/dsh-sensitive-replace.git
+```
+
+几点要知道：
+
+- 装 git 依赖要求**本机有 git**，并且能连到对应站点（GitHub 在国内常需要代理；GitHub 不通时用 Gitee 那条）。
+- 钉 `#<tag>` 比跟 `main` 稳；不钉就会一直跟着默认分支走，下次重装可能变版本。
+- pnpm 首次装 git 依赖可能提示「允许构建」（`allowBuilds`）；本包没有 `prepare`/`postinstall` 脚本，按提示批准即可，不批也能用。
+- Gitee 是 GitHub 的镜像，**版本可能比 npm 慢一拍**；要最新就用 npm。
+
+### 方式三：本地 tarball
+
+```bash
+dsh plugin --profile web add /abs/path/dsh-sensitive-replace-0.7.2.tgz
+```
+
+### 方式四：作为普通 npm 依赖 + 手写一行
 
 不想用 bundle 机制时：
 
 ```bash
-npm install /abs/path/dsh-sensitive-replace-0.7.0.tgz     # 或放进 profile 的依赖里
+npm install /abs/path/dsh-sensitive-replace-0.7.2.tgz     # 或放进 profile 的依赖里
 ```
 
 然后在 profile 的 `cordis.patch.yml`（用户 patch 层）里加一行：
@@ -145,7 +168,7 @@ llm/stream(options, next)
 - 平台目前没有给插件「执行前改写 tool-call 参数」或「展示前改写助手文本」的合法挂点（`PreToolDecision` 只有 `allow` / `deny` / `cancel` / `ask`，不含改参；会话事件 append-only 且深冻结），所以占位符一旦落进日志或工具参数，就会**原样执行、原样展示**。
 - 需要事后对回原文时，用 `replaceWith: '[BLOCKED:{n}]'` + 工具返回的 `hits` 明细，按屏蔽表当前文件**人工**对照；插件不会自动还原。
 
-诊断：`sensitive_replace_status` 工具（只读）给出规则数、各关口清洗次数、最近一次出网前替换处数、是否处于加硬清洗、400 自动恢复次数，
+诊断：`sensitive_replace_status` 工具（只读）给出规则数、**屏蔽表是否存在**、各关口清洗次数、最近一次出网前替换处数、是否处于加硬清洗、400 自动恢复次数，
 以及**每条规则的命中次数**（只给编号 / 位置 / 次数 / 距今秒数，不含规则文本：编号规则见[形态](#形态)）和**屏蔽表形态警告明细**。
 
 ---
@@ -271,7 +294,7 @@ ruleHits: [ { n: 3, scope: 'providers.deepseek-official/models.deepseek-flash', 
 ## 工具面
 
 - `replace_sensitive` —— 手动清洗任意文本；`provider` / `model` 缺省只套全局规则，指定时叠加对应专属规则；返回清洗后文本、替换计数与命中明细（`hits`）。
-- `sensitive_replace_status` —— 只读诊断：规则数、各关口清洗次数、最近一次出网前替换处数、是否处于加硬清洗、400 自动恢复次数、
+- `sensitive_replace_status` —— 只读诊断：规则数、**屏蔽表是否存在**、各关口清洗次数、最近一次出网前替换处数、是否处于加硬清洗、400 自动恢复次数、
   **每条规则的命中次数**（`ruleHits`：编号 / 位置 / 次数 / 距今秒数）与**屏蔽表形态警告明细**（`warningList`）。
   **不返回任何屏蔽词内容**（规则只以编号出现），可安全用于确认"出网前清洗是否真的在工作"、以及"新加的规则有没有真的命中"。
 
@@ -405,7 +428,7 @@ DSH 读到 `package.json` 的 `dsh.bundle.patch` 指向 `./cordis.patch.yml`，�
 ls "$DSH_HOME"/profiles/<profile>/node_modules/dsh-sensitive-replace/cordis.patch.yml
 # ② 有就用当前版本覆盖重装；急用可以先卸掉让 DSH 起来
 dsh plugin --profile <profile> remove dsh-sensitive-replace
-dsh plugin --profile <profile> add /abs/path/dsh-sensitive-replace-0.7.1.tgz
+dsh plugin --profile <profile> add /abs/path/dsh-sensitive-replace-0.7.2.tgz
 ```
 
 自己打的包也可以先 `npm pack --dry-run` 看一眼：文件列表里应当有 `cordis.patch.yml`。
@@ -429,15 +452,23 @@ dsh plugin --profile <profile> add /abs/path/dsh-sensitive-replace-0.7.1.tgz
 
 ## 版本变更
 
+### 0.7.2
+
+- **状态行能看出屏蔽表在不在**：`sensitive_replace_status` 的那行中文里补了 `｜屏蔽表 存在` /
+  `｜屏蔽表 缺失（未建表）`（紧跟规则数）。0.7.1 只把 `blocklistExists` 放进了结构化输出，
+  看工具结果时仍然分不清"表是空的"和"表没读到"。
+- 工具 description 同步写清这一项。
+- 新增 `tests/v072.test.mjs`（4 条），全量 59 条。
+
 ### 0.7.1
 
 - **屏蔽表缺失不再是一片空白**：启动时若 `blocklistPath` 指向的文件不存在，就写一张**空表模板**
   （只有结构说明与 `global: []` / `providers: {}`，不含任何屏蔽词），并在日志里写明路径 ——
   用户不用猜文件该放哪、该长什么样。约束：`wx` 独占创建，**绝不覆盖**已有文件；父目录不存在会一并创建；
   创建失败（权限/路径非法）**只告警、不抛异常**，插件照常运行（规则为空）。开关 `createBlocklistIfMissing`（默认 true）。
-- `sensitive_replace_status` 增加 `blocklistExists`，一眼看出到底是"表是空的"还是"表没读到"。
+- `sensitive_replace_status` 增加 `blocklistExists`（0.7.2 起也显示在那行中文里），用来区分"表是空的"与"表没读到"。
 - 新增 `ensureBlocklist()` / `BLOCKLIST_TEMPLATE` 两个导出，便于脚本侧复用同一份模板。
-- 新增 `tests/v071.test.mjs`（8 条），全量 54 条。
+- 新增 `tests/v071.test.mjs`（8 条），全量 55 条。
 
 ### 0.7.0
 
