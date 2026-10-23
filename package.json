@@ -1,7 +1,7 @@
 {
   "name": "dsh-sensitive-replace",
-  "version": "0.7.1",
-  "description": "敏感字符自动替换：按用户维护的 YAML 屏蔽表（全局 / 按 Provider ID / 模型，默认 $DSH_HOME/sensitive-blocklist.yaml）在内容进入会话上下文前替换命中字符，规避 DeepSeek 官方 Content Exists Risk 400（v0.7.1：兼容 DSH 0.2.0-rc.x，无需版本豁免；屏蔽表缺失时自动建空表 + 形态告警 + 规则级命中计数）",
+  "version": "0.7.2",
+  "description": "敏感字符自动替换：按用户维护的 YAML 屏蔽表（全局 / 按 Provider ID / 模型，默认 $DSH_HOME/sensitive-blocklist.yaml）在内容进入会话上下文前替换命中字符，规避 DeepSeek 官方 Content Exists Risk 400（v0.7.2：状态行显示屏蔽表是否存在；屏蔽表缺失时自动建空表 + 形态告警 + 规则级命中计数；兼容 DSH 0.2.0-rc.x）",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -39,6 +39,7 @@
   "keywords": [
     "dsh",
     "deepseek-harness",
+    "dsh-plugin",
     "cordis",
     "cordis-plugin",
     "plugin",
