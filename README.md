@@ -7,7 +7,11 @@
 
 本包是一个 **DSH Profile Bundle**（`package.json` 里声明 `dsh.bundle.patch`），装进 profile 即自动挂载，不需要手写组合行。
 
-**在哪能拿到**：npm [`dsh-sensitive-replace`](https://www.npmjs.com/package/dsh-sensitive-replace) · GitHub [Short-Arm-Ape/dsh-sensitive-replace](https://github.com/Short-Arm-Ape/dsh-sensitive-replace) · Gitee [Short_Arm_Ape/dsh-sensitive-replace](https://gitee.com/Short_Arm_Ape/dsh-sensitive-replace)（镜像，同步 GitHub 的 main）。
+**代码、版本与来源**
+
+- **最新代码**在 GitHub 仓库 [`Short-Arm-Ape/dsh-sensitive-replace`](https://github.com/Short-Arm-Ape/dsh-sensitive-replace) 的 `main` 上，可能含尚未发布的改动；
+- **正式版本**看同一个仓库的 [Releases](https://github.com/Short-Arm-Ape/dsh-sensitive-replace/releases)（tag `vX.Y.Z`）与 npm [`dsh-sensitive-replace`](https://www.npmjs.com/package/dsh-sensitive-replace)——这两处同号，由 CI 从 tag 发布；引用版本号以它们为准；
+- Gitee [`Short_Arm_Ape/dsh-sensitive-replace`](https://gitee.com/Short_Arm_Ape/dsh-sensitive-replace) 是 GitHub 的镜像，可能滞后。
 
 **同类项目**：生态里已有 [dsh-text-guard](https://github.com/7771sd/dsh-text-guard) 等同类插件，差异见[与同类插件的关系](#与同类插件的关系)。
 
@@ -17,7 +21,9 @@
 
 前置：DSH（`dsh` CLI 在 PATH 上）、profile 名（默认 `web`）。
 
-### 方式一：从 npm 装（推荐）
+要**正式版本**走方式一（npm）或从 Releases 同号 tag 装；要**最新代码 / 自己改**走方式二（GitHub `main`）。
+
+### 方式一：从 npm 装（正式版本，日常推荐）
 
 ```bash
 dsh plugin --profile web add dsh-sensitive-replace
@@ -28,7 +34,7 @@ dsh plugin --profile web add dsh-sensitive-replace
 
 装完重启该 profile（`dsh web` 的 profile 若开着 `patchReload: live`，改 patch 层可热生效；新增依赖仍建议重启一次）。
 
-### 方式二：直接从 Git 仓装（GitHub / Gitee）
+### 方式二：直接从 Git 仓装（跟最新代码 / 自己改）
 
 不想走 npm 时，直接装仓库源码也行——本包 `lib/` 是入库的，**没有构建步骤**：
 
@@ -45,7 +51,7 @@ dsh plugin --profile web add git+https://gitee.com/Short_Arm_Ape/dsh-sensitive-r
 - 装 git 依赖要求**本机有 git**，并且能连到对应站点（GitHub 在国内常需要代理；GitHub 不通时用 Gitee 那条）。
 - 钉 `#<tag>` 比跟 `main` 稳；不钉就会一直跟着默认分支走，下次重装可能变版本。
 - pnpm 首次装 git 依赖可能提示「允许构建」（`allowBuilds`）；本包没有 `prepare`/`postinstall` 脚本，按提示批准即可，不批也能用。
-- Gitee 是 GitHub 的镜像，**版本可能比 npm 慢一拍**；要最新就用 npm。
+- 想跟**最新代码**就走 GitHub `main`（或 Gitee 镜像）；想要**正式版本**，用 npm 或 Releases 里同号的 tag——两者优先，镜像其次。
 
 ### 方式三：本地 tarball
 
@@ -69,18 +75,16 @@ npm install /abs/path/dsh-sensitive-replace-0.7.2.tgz     # 或放进 profile �
       name: 'dsh-sensitive-replace'
 ```
 
-### 之后：准备屏蔽表
+### 之后：准备屏蔽表（必须自己写，这是插件的核心配置）
 
-**不用自己建文件**：插件启动时发现屏蔽表不存在，会直接写一张空表模板
-（`$DSH_HOME/sensitive-blocklist.yaml`，`$DSH_HOME` 默认 `~/.dsh`；Windows 上是 `%DSH_HOME%`，默认 `%USERPROFILE%\.dsh`；
-可用 config `blocklistPath` 覆盖），文件里带格式说明，把要屏蔽的字符填进去保存就生效。
-要更完整的示例（三级匹配、`re:` 正则、模型前缀模式）可以照 `samples/sensitive-blocklist.example.yaml` 抄。
+屏蔽表默认路径 `$DSH_HOME/sensitive-blocklist.yaml`（`$DSH_HOME` 默认 `~/.dsh`；Windows 上默认 `%USERPROFILE%\.dsh`；
+可用 config `blocklistPath` 改）。**这张表要你自己建、自己维护**：把要屏蔽的字符按格式填进去，保存即生效（按 mtime 热重载，不用重启）。
 
-- **绝不覆盖**：文件已存在时插件一字不动（用 `wx` 独占创建）；
-- **建不了也不影响启动**：权限/路径有问题时只在日志里告警，插件照常运行（规则为空）；
-- 不想让它建文件就设 `createBlocklistIfMissing: false`，此时文件缺失的行为回到「静默空转」并在日志说明。
+不会写就照 `samples/sensitive-blocklist.example.yaml` 抄——里面有全局 / 按 Provider ID / 按模型三种写法和 `re:` 正则。
 
-**保存即生效**：屏蔽表按文件 mtime 热重载，增删词无需重启。
+**兜底（不是推荐用法）**：如果启动时这个文件**不存在**，插件会写一张**空表模板**（只有格式说明，不含任何屏蔽词）并记一条日志。
+这样"忘了建表"至少不会变成静默空转；但**空表 = 一条规则都没在生效**。已存在的文件永远不会被覆盖（`wx` 独占创建）；
+建不出来（权限/路径问题）只在日志里告警，插件照常运行。不想要这个兜底就设 `createBlocklistIfMissing: false`。
 
 ### 配置覆盖
 
@@ -211,7 +215,7 @@ llm/stream(options, next)
   - `global:` —— 对所有 Provider ID 生效的字符列表（最通用）
   - `providers:` 下按 Provider ID 分键 —— 键 = **DSH 的 provider 路由 id**（即请求 `options.provider`，如 `deepseek-official`）
 - **保存即生效**：按文件 mtime 热重载，增删屏蔽项无需重启
-- **文件不存在会自动建空表**（v0.7.1）：启动时写一份带说明的空表模板，不覆盖已有文件；建不出来只告警不报错
+- **文件不存在时写空表模板（v0.7.1，兜底）**：启动时写一份带说明的空表模板，不覆盖已有文件；建不出来只告警不报错。**空表等于没有规则**，这不是开箱即用，是怕你忘了建表变成静默空转
 
 ```yaml
 # 敏感字符屏蔽表（支持注释）
@@ -313,7 +317,7 @@ ruleHits: [ { n: 3, scope: 'providers.deepseek-official/models.deepseek-flash', 
 | aggressive | boolean | false | 常开加硬清洗（不等 400 也额外剥离 emoji / 符号） |
 | maxRecoveries | number | 2 | 10 分钟窗口内最多自动重试几次（防 400 循环） |
 | blocklistPath | string | `$DSH_HOME/sensitive-blocklist.yaml` | 屏蔽表文档路径 |
-| createBlocklistIfMissing | boolean | true | 文件不存在时自动创建空表模板（已存在绝不覆盖；失败只告警） |
+| createBlocklistIfMissing | boolean | true | 文件不存在时兜底创建空表模板（已存在绝不覆盖；失败只告警；空表=无规则） |
 | replaceWith | string | `[BLOCKED]` | 替换占位符——含 `{n}` 时按规则序号编号（便于还原），明示内容被屏蔽而非静默删除 |
 
 `replaceWith` 用进 `tool-call` 参数时会自动做 JSON 转义，不会把参数弄成非法 JSON。
@@ -433,7 +437,8 @@ dsh plugin --profile <profile> add /abs/path/dsh-sensitive-replace-0.7.2.tgz
 
 自己打的包也可以先 `npm pack --dry-run` 看一眼：文件列表里应当有 `cordis.patch.yml`。
 
-**插件装上了、屏蔽表却是空的**：v0.7.1 起启动时若文件不存在会自动建一张空表模板，日志里有
+**插件装上了、屏蔽表却是空的**：先确认表在哪（`sensitive_replace_status` 里 `blocklistExists` 为真、且 `规则 全局0/来源0 组` 就是"表在但没写规则"）。
+如果文件压根不存在，v0.7.1 起会**兜底**写一张空表模板，日志里有
 `屏蔽表不存在 → 已创建空表模板: <路径>`；照那个路径填规则即可。若文件确实存在但一条规则都没加载，
 看 `sensitive_replace_status` 的 `warningList`（形态写错会明确告警）与 `blocklistExists`。
 
