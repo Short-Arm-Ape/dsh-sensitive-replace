@@ -1,16 +1,18 @@
 # dsh-sensitive-replace
 
-敏感字符自动替换插件（v0.7.2）：按**用户自行维护的屏蔽表文档**，在**内容进入会话上下文之前**、以及**请求出网之前**两个关口把命中字符替换为占位符，
-从源头规避 DeepSeek 官方 API 的 `Content Exists Risk` 400（根因：特定字符如部分 emoji 码位组合单独出现即命中官方审核）。
-真出了 400 也能自动加硬清洗并重试，**对话与上下文保持连续**。
-替换是**单向且不可逆**的（详见[能力与边界](#能力与边界务必读)）；屏蔽表写错的形态会在加载期明确告警，不再静默失效。
+敏感字符自动替换插件（v0.7.2）：
 
-本包是一个 **DSH Profile Bundle**（`package.json` 里声明 `dsh.bundle.patch`），装进 profile 即自动挂载，不需要手写组合行。
+按用户自行维护的屏蔽表文档，在**内容进入会话上下文之前**、以及**请求出网之前**两个关口把命中字符替换为占位符，
+从源头规避 DeepSeek 官方 API 的 `Content Exists Risk` 400（根因：特定政治敏感字符会命中官方审核）。
+若会话已经触发 400 ，插件也能自动加硬清洗并重试，防止因上下文中的敏感内容进入请求造成再次触发。
+替换是**单向且不可逆**的（详见[能力与边界](#能力与边界务必读)）；屏蔽表格式不正确会在加载期明确告警。
+
+本包是一个 **DSH Profile Bundle**（`package.json` 里声明 `dsh.bundle.patch`），装进 profile 即自动挂载。
 
 **代码、版本与来源**
 
 - **最新代码**在 GitHub 仓库 [`Short-Arm-Ape/dsh-sensitive-replace`](https://github.com/Short-Arm-Ape/dsh-sensitive-replace) 的 `main` 上，可能含尚未发布的改动；
-- **正式版本**看同一个仓库的 [Releases](https://github.com/Short-Arm-Ape/dsh-sensitive-replace/releases)（tag `vX.Y.Z`）与 npm [`dsh-sensitive-replace`](https://www.npmjs.com/package/dsh-sensitive-replace)——这两处同号，由 CI 从 tag 发布；引用版本号以它们为准；
+- **正式版本**参见同仓库的 [Releases](https://github.com/Short-Arm-Ape/dsh-sensitive-replace/releases)（tag `vX.Y.Z`）或 npm [`dsh-sensitive-replace`](https://www.npmjs.com/package/dsh-sensitive-replace)——这两处同号，由 CI 从 tag 发布；引用版本号以它们为准；
 - Gitee [`Short_Arm_Ape/dsh-sensitive-replace`](https://gitee.com/Short_Arm_Ape/dsh-sensitive-replace) 是 GitHub 的镜像，可能滞后。
 
 **同类项目**：生态里已有 [dsh-text-guard](https://github.com/7771sd/dsh-text-guard) 等同类插件，差异见[与同类插件的关系](#与同类插件的关系)。
@@ -19,39 +21,37 @@
 
 ## 安装
 
-前置：DSH（`dsh` CLI 在 PATH 上）、profile 名（默认 `web`）。
+前置条件：需确保 `dsh` 命令可用，本说明提供的命令所指的 profile 名默认 `web`，请根据实际情况修改。
 
-要**正式版本**走方式一（npm）或从 Releases 同号 tag 装；要**最新代码 / 自己改**走方式二（GitHub `main`）。
-
-### 方式一：从 npm 装（正式版本，日常推荐）
+### 方式一：从 npm 安装（推荐）
 
 ```bash
 dsh plugin --profile web add dsh-sensitive-replace
 ```
 
 `dsh plugin` 本质是在 profile 目录里跑 pnpm，并在装完后把「声明了 `dsh.bundle` 的依赖」自动并入 `dsh.profile.bundles` 层栈。
-本包声明了 `dsh.bundle.patch`，所以它自带的 `cordis.patch.yml` 会在下次启动 profile 时被组合进去，**无需手写插件行**。
+本包声明了 `dsh.bundle.patch`，所以它自带的 `cordis.patch.yml` 会在下次启动 profile 时被组合进去，无需手动编辑 `cordis.patch.yml` 。
 
 装完重启该 profile（`dsh web` 的 profile 若开着 `patchReload: live`，改 patch 层可热生效；新增依赖仍建议重启一次）。
 
-### 方式二：直接从 Git 仓装（跟最新代码 / 自己改）
+### 方式二：通过 git 从仓库安装
 
-不想走 npm 时，直接装仓库源码也行——本包 `lib/` 是入库的，**没有构建步骤**：
+本包 `lib/` 是入库的，没有构建步骤：
 
 ```bash
-# GitHub（pnpm 的 github: 简写；可加 #<tag 或 commit> 钉版本，生产环境建议钉）
+# GitHub（可添加 #<tag> 或 #<commit> 参数指定版本，如下方所示的 #v0.7.2 ）
 dsh plugin --profile web add github:Short-Arm-Ape/dsh-sensitive-replace#v0.7.2
 
-# Gitee（国内镜像：走完整 git 地址）
+# Gitee（国内镜像）
 dsh plugin --profile web add git+https://gitee.com/Short_Arm_Ape/dsh-sensitive-replace.git
 ```
 
-几点要知道：
+注：
 
-- 装 git 依赖要求**本机有 git**，并且能连到对应站点（GitHub 在国内常需要代理；GitHub 不通时用 Gitee 那条）。
-- 钉 `#<tag>` 比跟 `main` 稳；不钉就会一直跟着默认分支走，下次重装可能变版本。
-- pnpm 首次装 git 依赖可能提示「允许构建」（`allowBuilds`）；本包没有 `prepare`/`postinstall` 脚本，按提示批准即可，不批也能用。
-- 想跟**最新代码**就走 GitHub `main`（或 Gitee 镜像）；想要**正式版本**，用 npm 或 Releases 里同号的 tag——两者优先，镜像其次。
+- 生产环境建议下加 `#<tag>` 参数指定到最新正式版本。
+- 安装 git 依赖要求**本机装有 git**，并且能连接到对应站点。
+- 中国大陆地区用户若下载缓慢或不稳定可以从 Gitee 安装，但 Gitee 上的版本可能落后。
+- pnpm 首次安装 git 依赖可能提示「允许构建」（`allowBuilds`）；本包没有 `prepare`/`postinstall` 脚本，按提示批准即可。
 
 ### 方式三：本地 tarball
 
@@ -59,15 +59,13 @@ dsh plugin --profile web add git+https://gitee.com/Short_Arm_Ape/dsh-sensitive-r
 dsh plugin --profile web add /abs/path/dsh-sensitive-replace-0.7.2.tgz
 ```
 
-### 方式四：作为普通 npm 依赖 + 手写一行
-
-不想用 bundle 机制时：
+### 方式四：作为普通 npm 依赖安装 + 手动编辑 `cordis.patch.yml`
 
 ```bash
 npm install /abs/path/dsh-sensitive-replace-0.7.2.tgz     # 或放进 profile 的依赖里
 ```
 
-然后在 profile 的 `cordis.patch.yml`（用户 patch 层）里加一行：
+然后在 profile 的 `cordis.patch.yml`（用户 patch 层）里追加以下内容：
 
 ```yaml
 - insert:
@@ -75,16 +73,18 @@ npm install /abs/path/dsh-sensitive-replace-0.7.2.tgz     # 或放进 profile �
       name: 'dsh-sensitive-replace'
 ```
 
-### 之后：准备屏蔽表（必须自己写，这是插件的核心配置）
+### [必读]准备屏蔽表
 
-屏蔽表默认路径 `$DSH_HOME/sensitive-blocklist.yaml`（`$DSH_HOME` 默认 `~/.dsh`；Windows 上默认 `%USERPROFILE%\.dsh`；
-可用 config `blocklistPath` 改）。**这张表要你自己建、自己维护**：把要屏蔽的字符按格式填进去，保存即生效（按 mtime 热重载，不用重启）。
+屏蔽表默认路径位于 `$DSH_HOME/sensitive-blocklist.yaml`（`$DSH_HOME` 默认 `~/.dsh`；Windows 上默认 `%USERPROFILE%\.dsh`；
+可用 config `blocklistPath` 修改）。
 
-不会写就照 `samples/sensitive-blocklist.example.yaml` 抄——里面有全局 / 按 Provider ID / 按模型三种写法和 `re:` 正则。
+本仓库不含具体的屏蔽词内容，**需要你自己维护屏蔽表**：把要屏蔽的字符按格式填进去，保存即生效（按 mtime 热重载，无需重启）。
 
-**兜底（不是推荐用法）**：如果启动时这个文件**不存在**，插件会写一张**空表模板**（只有格式说明，不含任何屏蔽词）并记一条日志。
+屏蔽表的填写可参考 `samples/sensitive-blocklist.example.yaml` ——里面有全局 / 按 Provider ID / 按模型三种写法和 `re:` 正则。
+
+注：如果启动时这个文件**不存在**，插件会写一张**空表模板**（只有格式说明，不含任何屏蔽词）并记一条日志。
 这样"忘了建表"至少不会变成静默空转；但**空表 = 一条规则都没在生效**。已存在的文件永远不会被覆盖（`wx` 独占创建）；
-建不出来（权限/路径问题）只在日志里告警，插件照常运行。不想要这个兜底就设 `createBlocklistIfMissing: false`。
+无法建表（权限/路径问题）只在日志里告警，插件照常运行。若需取消该行为请设置 `createBlocklistIfMissing: false`。
 
 ### 配置覆盖
 
@@ -102,7 +102,7 @@ npm install /abs/path/dsh-sensitive-replace-0.7.2.tgz     # 或放进 profile �
 
 ---
 
-## 它到底在哪儿替换（三道关口）
+## 替换内容的时机（三道关口）
 
 DSH 里发往模型的请求是**深冻结**的：`dsh-llm` 的消息工厂 `createMessage → freezeMessage → deepFreeze(structuredClone(...))`，
 `dsh-agent-loop` 构请求时还会对每条消息 `deepFreeze()` 并 `Object.freeze(boundaryMessages)`。
@@ -130,17 +130,17 @@ llm/stream(options, next)
 
 ### 400 自动恢复（`recoverOn400`）
 
-万一还是 400（例如内容里有你**还没写进屏蔽表**的字符），插件在 `agent/request-error` 里接管：
+若不慎触发 400错误（例如内容里有你**尚未写进屏蔽表**的字符），插件将在 `agent/request-error` 里接管：
 
 1. 判定 `failure.status === 400`（或 `code === 'INVALID_REQUEST'`，DeepSeek 适配器就是这么映射的）；
 2. 开启**加硬清洗**：在规则之外额外剥离 emoji / 旗帜 / 杂项符号一类码位（`[\u{1F000}-\u{1FAFF}]` 等），持续 `aggressiveMs`；
-3. 返回 `{ kind:'retry' }` —— 循环重试时会**重新从会话日志派生请求**，于是这一次就能发出去，**对话与上下文保持连续，不用新建会话**。
+3. 返回 `{ kind:'retry' }` —— 循环重试时会**重新从会话日志派生请求**，于是这次请求就能发出去，**对话与上下文保持连续，不用新建会话**。
 
 窗口内重试次数由 `maxRecoveries` 封顶（默认 2 次 / 10 分钟），避免 400 循环；到顶后照常失败并提示"把触发内容加进屏蔽表"。
 
 > 加硬清洗也可以在没出事时常开：`aggressive: true`（偏执模式）。
 
-### 路由（provider/model）怎么来的
+### 路由（provider/model）的判定
 
 `agent/pre-step` / `tools/post-execute` 的载荷里没有 provider/model，而规则是分 Provider ID / 模型的。
 插件监听 `agent/request` 瀑布，按 agent 记住最近一次解析出的 `provider`/`model`，供清洗时套用专属规则；
@@ -151,15 +151,15 @@ llm/stream(options, next)
 
 ---
 
-## 能力与边界（务必读）
+## [必读]能力与边界
 
-**会被替换的**（命中屏蔽表即换，三道关口合计覆盖）：
+**替换内容**（命中屏蔽表即换，三道关口合计覆盖）：
 
-- 用户/插件发来的**新**消息（`agent/pre-step`，进日志前）；
+- 用户/插件发来的**新消息**（`agent/pre-step`，进日志前）；
 - 所有**工具结果**文本（`tools/post-execute`，进日志前）；
 - **出网前的整份请求**（`llm/stream` 深拷贝清洗）：历史消息、模型自己写过的 text/reasoning、`tool-call` 参数、system —— 包括**装插件之前就已经躺在日志里**的内容。
 
-**仍然不会替换的**：
+**不会替换的内容**：
 
 - `tool-call` 参数里的替换是**文本级**的：它保持 JSON 合法，但如果某个规则正好匹配到 JSON 结构字符（比如规则里写了 `"command"`），替换后语义仍合法、只是工具可能收到不同参数 —— 规则尽量写"内容词"，别写结构词；
 - 图片/文件附件（二进制，不参与文本替换）；
@@ -179,7 +179,7 @@ llm/stream(options, next)
 
 ## 与同类插件的关系
 
-解决同一个 400 的插件不止一个，最接近的是 [dsh-text-guard](https://github.com/7771sd/dsh-text-guard)（作者 7771sd，MIT）。
+解决同类问题的插件不止一个，最接近的是 [dsh-text-guard](https://github.com/7771sd/dsh-text-guard)（作者 7771sd，MIT）。
 两者思路一致（都在内容进日志前中和），差别在覆盖面与运维方式：
 
 | 能力 | 本插件 | dsh-text-guard |
@@ -196,19 +196,19 @@ llm/stream(options, next)
 `dsh-tools` 的 `commit()` 先 `scheduler.finalize()`（= 跑 post-execute）拿到结果，之后 `settle()` 才用这份结果写 `tool/ptc-dispatch` 事件，
 所以子分发内容不会绕过第二道关口。要自行核对，看 `dsh-tools/lib/index.js` 里的 `finalizeScheduledExecution` 与 `shapeDispatchLog` 两条路径即可。
 
-一句话选型：只要**码位级、零配置**的方案（专治 emoji/旗帜一类码位）用 dsh-text-guard 更轻；
+建议：只要**码位级、零配置**的方案（专治 emoji/旗帜一类码位）用 dsh-text-guard 更轻；
 要**出网前兜底（含历史内容与 system prompt）+ 400 自动恢复 + 可热改的屏蔽表**就用本插件。
-两者同时挂不冲突（规则各自独立），但没必要 —— 本插件覆盖了它除那道冗余挂点之外的全部能力。
+两者可同时挂载（规则各自独立），但没必要 —— 本插件覆盖了它除那道冗余挂点之外的全部能力。
 
 生态里还有一批**目标不同**的插件：PII / 凭据脱敏（`dsh-privmask`、`dsh-privacy-protector`）、
 屏蔽文件读取（[Yazzyk/dsh-file-shield](https://github.com/Yazzyk/dsh-file-shield)）、隐私掩码（[Huauauaa/dsh-privacy-mask](https://github.com/Huauauaa/dsh-privacy-mask)）等 ——
-它们回答的是"不想让模型看到什么"，本插件回答的是"什么会让官方 API 400"。
+它们的目标"不想让模型看到什么"，本插件的目标"避免官方 API 400造成会话中断"。
 
 ---
 
 ## 形态
 
-不是插件内置默认目标，而是**用户维护一份 YAML 屏蔽表**，按「全局 / Provider ID / 模型」分类，手动填入需要屏蔽的字符或短语（字形、`\u{XXXX}` 码位、正则均可）。
+**本插件不内置具体屏蔽词**，而是**需要用户维护一份 YAML 屏蔽表**，按「全局 / Provider ID / 模型」分类，手动填入需要屏蔽的字符或短语（字形、`\u{XXXX}` 码位、正则均可）。
 
 - 默认文档：`$DSH_HOME/sensitive-blocklist.yaml`（可用 config `blocklistPath` 覆盖）
 - 结构：
@@ -448,7 +448,7 @@ dsh plugin --profile <profile> add /abs/path/dsh-sensitive-replace-0.7.2.tgz
 
 源码 / 日志 / 输出不携带屏蔽字符字形，只以码位、计数与规则序号出现；替换位为纯 ASCII 占位符（默认 `[BLOCKED]`），明示内容被屏蔽而非静默删除。**本仓库任何文件（含 `tests/`、`samples/`、README、两个 `content-risk-interactive.*` 探测脚本与类型注释里的示例）都不含真实屏蔽词** —— 示例一律用随机低碰撞占位符（`blocklist-check-…`）或编造的 provider / model 键；真实屏蔽表只存在于使用者本机 `$DSH_HOME/sensitive-blocklist.yaml`，发布包可放心分发。
 
-> 这段是可核对的说法，不是口号：仓库内的规则条目、provider / model 键与码位示例都可以逐条读；`sensitive_replace_status` 的 `ruleHits` / `warningList` 也只给编号、位置与次数，不含条目文本。
+> 仓库内的规则条目、provider / model 键与码位示例都可以逐条读；`sensitive_replace_status` 的 `ruleHits` / `warningList` 也只给编号、位置与次数，不含条目文本。
 
 > 也就是说：**出网前那道清洗不写日志、也不回填日志** —— 日志里保留原文，只有发往 provider 的那一份被替换。
 > 这是有意的：不改写会话日志的"可重建"语义，人类看到的对话记录也保持完整。
@@ -538,7 +538,7 @@ dsh plugin --profile <profile> add /abs/path/dsh-sensitive-replace-0.7.2.tgz
 - 新增辅助导出：`replaceBlocksCopy` / `replaceMessageCopy` / `countText` / `scanBlocks` / `scanOptions`；
   移除原地改写的 `replaceBlocks` / `replaceMessage` / `sanitizeOptions`（它们在本平台上永远失败）。
 - 包改为 **DSH Profile Bundle**（`package.json` 的 `dsh.bundle.patch` + 自带 `cordis.patch.yml`），
-  `dsh plugin --profile <p> add` 后自动入层栈，不再需要手写插件行。
+  `dsh plugin --profile <p> add` 后自动入层栈，不再需要手动编辑 `cordis.patch.yml` 。
 - README 去掉平台专属的安装方式与硬编码路径，改为通用写法（`$DSH_HOME` / `%DSH_HOME%`）。
 - 修正 `samples/` 与 README 里**会静默失效的 YAML 示例**（数组形态里嵌 `models:`、以及猜的模型键），并补上「三种写法坑」警示 —— 原示例照抄会漏掉模型级规则。
 
