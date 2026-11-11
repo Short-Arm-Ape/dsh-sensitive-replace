@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="dsh-sensitive-replace">
+  <defs>
+    <linearGradient id="tile" x1="4" y1="2" x2="44" y2="46" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="46" height="46" rx="11" fill="url(#tile)" stroke="#334155" stroke-width="2"/>
+  <!-- 三个星号 = 被替换掉的那几个字符；间距留够，24px 下也不粘连 -->
+  <g stroke="#60a5fa" stroke-width="2.6" stroke-linecap="round" fill="none">
+    <path d="M8.2 24h7.6M9.9 20.9l4.2 6.2M14.1 20.9l-4.2 6.2"/>
+    <path d="M20.2 24h7.6M21.9 20.9l4.2 6.2M26.1 20.9l-4.2 6.2"/>
+    <path d="M32.2 24h7.6M33.9 20.9l4.2 6.2M38.1 20.9l-4.2 6.2"/>
+  </g>
+</svg>

@@ -190,38 +190,64 @@ test('llm/stream：dispatchScrub=false 时退回只读扫描（不改写）', ()
 test('agent/request-error：400 → 重试；其它失败放行；超过上限不再重试', async () => {
   const doc = blocklistDoc()
   try {
-    const f = mount(doc.path, llmStub([]), { maxRecoveries: 1 })
+    const SIG = { aborted: false }
+    const f = mount(doc.path, llmStub([]), { maxRecoveries: 1, stripEmojiOn400: true })
     const handler = f.first('agent/request-error')
     assert.equal(await handler({ failure: { status: 500, code: 'SERVER' } }, async () => undefined), undefined, '非 400 放行')
     assert.deepEqual(
-      await handler({ failure: { status: 400, code: 'INVALID_REQUEST', message: 'Content Exists Risk' } }, async () => undefined),
+      await handler({ failure: { status: 400, code: 'INVALID_REQUEST', message: 'Content Exists Risk' }, signal: SIG }, async () => undefined),
       { kind: 'retry' },
     )
     assert.equal(
-      await handler({ failure: { status: 400, code: 'INVALID_REQUEST' } }, async () => undefined),
+      await handler({ failure: { status: 400, code: 'INVALID_REQUEST', message: 'Content Exists Risk' }, signal: { aborted: false } }, async () => undefined),
       undefined,
       '窗口内达到上限后放弃，避免 400 循环',
     )
     const s = await f.tool('sensitive_replace_status').execute({})
     assert.equal(s.recoveries, 1)
     assert.equal(s.last400, 'INVALID_REQUEST')
-    assert.equal(s.aggressive, true, '400 之后进入加硬清洗')
+    assert.equal(s.armedRetries, 1, '打了一次标，等那一次重试来消费')
   } finally {
     doc.cleanup()
   }
 })
 
-test('400 之后：没有写进屏蔽表的 emoji 也会被加硬清洗剥离', async () => {
+test('400 之后：没有写进屏蔽表的 emoji 会在那次重试里被剥离（v0.7.4：按 signal 一次打标）', async () => {
   const doc = blocklistDoc(['规则外的词']) // 屏蔽表里没有 emoji
   try {
+    const SIG = { aborted: false }
     const calls = []
-    const f = mount(doc.path, llmStub(calls))
-    await f.first('agent/request-error')({ failure: { status: 400, code: 'INVALID_REQUEST' } }, async () => undefined)
-    const options = { provider: 'deepseek-official', model: 'deepseek-flash', messages: [userMessage(`含 ${EMOJI} 的文本`)] }
+    const f = mount(doc.path, llmStub(calls), { stripEmojiOn400: true })
+    await f.first('agent/request-error')({ failure: { status: 400, code: 'INVALID_REQUEST', message: 'Content Exists Risk' }, signal: SIG }, async () => undefined)
+    const options = { provider: 'deepseek-official', model: 'deepseek-flash', signal: SIG, messages: [userMessage(`含 ${EMOJI} 的文本`)] }
     f.first('llm/stream')(options, () => (async function* () {})())
     assert.equal(calls.length, 1)
     assert.equal(calls[0][2].messages[0].content[0].text, '含 [BLOCKED] 的文本')
-    assert.ok(f.logs.some(([lvl, m]) => lvl === 'warn' && m.includes('加硬清洗')))
+    assert.ok(f.logs.some(([lvl, m]) => lvl === 'warn' && m.includes('加硬重试')))
+  } finally {
+    doc.cleanup()
+  }
+})
+
+test('400 之后（默认配置）：不重试、不剥 emoji —— 占位符不会污染模型上下文', async () => {
+  const doc = blocklistDoc(['规则外的词'])
+  try {
+    const calls = []
+    const f = mount(doc.path, llmStub(calls))
+    assert.equal(
+      await f.first('agent/request-error')({ failure: { status: 400, code: 'INVALID_REQUEST' } }, async () => undefined),
+      undefined,
+      '默认不重试（同一份请求重发只会再吃一次同样的 400）',
+    )
+    const options = { provider: 'deepseek-official', model: 'deepseek-flash', messages: [userMessage(`含 ${EMOJI} 的文本`)] }
+    f.first('llm/stream')(options, () => (async function* () {})())
+    assert.equal(calls.length, 0, '不应当改写请求')
+    assert.equal(options.messages[0].content[0].text, `含 ${EMOJI} 的文本`, 'emoji 原样')
+    const s = await f.tool('sensitive_replace_status').execute({})
+    assert.equal(s.stripEmojiOn400, false)
+    assert.equal(s.aggressive, false)
+    assert.equal(s.recoveries, 0)
+    assert.equal(s.last400, 'INVALID_REQUEST', '400 读数仍然要记下来')
   } finally {
     doc.cleanup()
   }
