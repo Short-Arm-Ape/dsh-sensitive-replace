@@ -1,11 +1,11 @@
 # dsh-sensitive-replace
 
-敏感字符自动替换插件（v0.7.2）：
+敏感字符自动替换插件（v0.7.5）：
 
 按用户自行维护的屏蔽表文档，在**内容进入会话上下文之前**、以及**请求出网之前**两个关口把命中字符替换为占位符，
 从源头规避 DeepSeek 官方 API 的 `Content Exists Risk` 400（根因：特定政治敏感字符会命中官方审核）。
-若会话已经触发 400 ，插件也能自动加硬清洗并重试，防止因上下文中的敏感内容进入请求造成再次触发。
-替换是**单向且不可逆**的（详见[能力与边界](#能力与边界务必读)）；屏蔽表格式不正确会在加载期明确告警。
+遇到 400 默认只记账、不擅自改内容（可显式打开 `stripEmojiOn400` 换成旧的「加硬清洗 + 重试」）。
+替换是**单向且不可逆**的（详见[能力与边界](#必读能力与边界)）；屏蔽表格式不正确会在加载期明确告警。
 
 本包是一个 **DSH Profile Bundle**（`package.json` 里声明 `dsh.bundle.patch`），装进 profile 即自动挂载。
 
@@ -128,17 +128,40 @@ llm/stream(options, next)
 不重进瀑布是有意的：其它 `llm/stream` 监听器（会话标题观察、检查点 flush）不会被同一次调用重复触发。
 若 `adapterStream` 不存在则退回公开的 `llm.stream(clean)`，并用 WeakSet 防止递归。
 
-### 400 自动恢复（`recoverOn400`）
+### 400 自动恢复（`recoverOn400` / `stripEmojiOn400`）
 
-若不慎触发 400错误（例如内容里有你**尚未写进屏蔽表**的字符），插件将在 `agent/request-error` 里接管：
+400 有两种成因，插件对它们分得很清楚 —— **默认只记录，不猜着改内容**：
 
-1. 判定 `failure.status === 400`（或 `code === 'INVALID_REQUEST'`，DeepSeek 适配器就是这么映射的）；
-2. 开启**加硬清洗**：在规则之外额外剥离 emoji / 旗帜 / 杂项符号一类码位（`[\u{1F000}-\u{1FAFF}]` 等），持续 `aggressiveMs`；
-3. 返回 `{ kind:'retry' }` —— 循环重试时会**重新从会话日志派生请求**，于是这次请求就能发出去，**对话与上下文保持连续，不用新建会话**。
+1. **内容风控**（`Content Exists Risk` 一类，响应里有 `error.message`）：某个词或符号没写进屏蔽表。
+   治本是把词加进屏蔽表再重发。
+2. **请求体被拒**（`INVALID_REQUEST`，响应里连 `error.message` 都没有）：是请求本身被打回，
+   **剥 emoji 救不了它**，重发只是把同一份请求再打一遍。
 
-窗口内重试次数由 `maxRecoveries` 封顶（默认 2 次 / 10 分钟），避免 400 循环；到顶后照常失败并提示"把触发内容加进屏蔽表"。
+**默认行为**：收到 400 只记一条 warn，并把读数写进 `sensitive_replace_status`（`last400`），
+**不重试、不改写内容**。
 
-> 加硬清洗也可以在没出事时常开：`aggressive: true`（偏执模式）。
+**想保留兜底**：显式打开 `stripEmojiOn400: true`。此时 400 会给**这一次请求**打一个标记
+（按 `agent/request-error` 载荷里的 `signal` 认人，和 `llm/stream` 的 `options.signal` 是同一个对象），
+重试时在规则之外额外剥离 emoji / 旗帜 / 杂项符号（`[\u{1F000}-\u{1FAFF}]` 等），**命中即销**：
+
+- 不跨会话、不跨步，也**没有时间窗口**（v0.7.3 及以前那个 10 分钟全局窗口，会把一次 400 剥给所有会话）；
+- 只对带 `error.message` 的 400 重试；
+- 重试次数仍由 `maxRecoveries` 封顶（默认 2 次 / 10 分钟），避免 400 循环。
+
+> ⚠️ 打开前先知道代价：加硬剥离会把 emoji 换成**可见**占位符 `[BLOCKED]`，而模型拿到的上下文就是
+> 替换后的样子 ⇒ 它可能把占位符当正文抄进文档。2026-11-11 用户就是这样踩到的。
+> 所以另有 `notifyReplaced`（默认开）：替换发生时往请求末尾追加一条说明，告诉模型"占位符不是原文、别照抄"。
+> `aggressive` / `aggressiveMs` 已废弃（常开剥离等于把 emoji 剥给所有请求），保留字段只为旧配置不报错。
+
+### 出网前的 well-formed 兜底（`fixLoneSurrogates`）
+
+有一种 400 跟屏蔽词**完全无关**：请求体本身不是合法 JSON。典型成因是模型在 `tool-call` 参数里写出
+`\ud83d` —— 本意 6 个字符，JSON 一解码变成半个代理对（孤立高位代理），provider 的解析器直接判
+`unexpected end of hex escape`，**整条请求被拒**；而这段参数躺在会话历史里，之后每一轮都被重放，重启也没用。
+（2026-11-11 实测：247 KB 的请求体里只有一处 U+D83D，就足以让那个会话永久 400。）
+
+插件会在出网前把请求里所有字符串的孤立代理项换成 U+FFFD；`tool-call` 的 `arguments` 是**原始 JSON 文本**，
+要 parse → 修 → 再序列化才看得见毒。没有命中时零拷贝，一个字节都不动。
 
 ### 路由（provider/model）的判定
 
@@ -163,7 +186,7 @@ llm/stream(options, next)
 
 - `tool-call` 参数里的替换是**文本级**的：它保持 JSON 合法，但如果某个规则正好匹配到 JSON 结构字符（比如规则里写了 `"command"`），替换后语义仍合法、只是工具可能收到不同参数 —— 规则尽量写"内容词"，别写结构词；
 - 图片/文件附件（二进制，不参与文本替换）；
-- 命中内容如果**不在**屏蔽表里，就不会被替换 —— 这是 400 的来源。此时 `recoverOn400` 会兜底（加硬清洗 + 重试），但它只剥离 emoji/符号一类码位；治本还是把词加进屏蔽表。
+- 命中内容如果**不在**屏蔽表里，就不会被替换 —— 这是内容风控 400 的来源。默认插件只记录不救（不重试、不改写内容），治本是把词加进屏蔽表；只有显式开 `stripEmojiOn400` 时才走「加硬清洗 + 重试」兜底。
 
 **替换是单向的，插件不提供还原**（挂之前先想清楚）：
 
@@ -187,7 +210,7 @@ llm/stream(options, next)
 | 进日志前中和（`agent/pre-step` / `tools/post-execute`） | ✅ | ✅ |
 | `run_code` 子分发日志副本（`tools/ptc-dispatch-log`） | 不需单独挂（子分发结果写该日志前已经过 `tools/post-execute`，见下） | ✅ 另挂一道 |
 | **出网前整份请求清洗**（`llm/stream`）：历史消息、模型自己写过的内容、tool-call 参数、**system prompt** | ✅ | ❌（其 README 把"system prompt 里的文本"列为已知盲区） |
-| **400 自动恢复**（加硬清洗 + 同会话 retry） | ✅ | ❌ |
+| **400 自动恢复**（加硬清洗 + 同会话 retry） | ✅ 需显式开 `stripEmojiOn400`（默认只记账） | ❌ |
 | 目标形态 | 用户维护的 YAML 屏蔽表（字形 / `\u{XXXX}` / `re:` 正则），global → Provider ID → 模型三级链 | 配置里的码位序列（`regional-pairs` 或 `exact`） |
 | 改配置后 | 保存即生效（按 mtime 热重载） | 需重新挂载 bundle |
 | 诊断面 | `sensitive_replace_status`（计数 + 每条规则命中 + 形态警告）、`replace_sensitive`（手动清洗任意文本） | 无 |
@@ -295,6 +318,21 @@ ruleHits: [ { n: 3, scope: 'providers.deepseek-official/models.deepseek-flash', 
 
 ---
 
+## 在插件列表里显示成什么样
+
+插件管理列表里的**名字 / 简介 / 图标**全来自包元数据，跟代码无关：
+
+| 字段 | 本项目 | 说明 |
+|---|---|---|
+| `package.json` 顶层 `icon` | `icon.svg` | 相对本包路径、必须留在包内；支持 SVG / PNG / JPEG / WebP，≤ 256 KiB；不许引用外部资源 |
+| `locale/en.json` + 同目录 `<lang>.json` | `locale/en.json`、`locale/zh.json` | 每个文件写 `{"meta": {"title": "...", "description": "..."}}`，按界面语言切换 |
+| `exports["./locale/*.json"]` | 已加 | **不加这条，loader 解析不到 locale**；且 `en.json` 不存在时整套多语言都不生效 |
+
+缺字段时的回退：`meta.title` → `package.json.name`，`meta.description` → `package.json.description`。
+实测（2026-11-11）：加这些之前列表里显示的是技术名 `dsh-sensitive-replace` + 整段 npm description、没有图标；
+加上之后 `readPluginMeta` 返回 `{ title: {en, zh}, description: {en, zh}, icon: data:image/svg+xml;base64,… }`。
+`tests/manifest.test.mjs` 把图标规格与 locale 契约钉住了。
+
 ## 工具面
 
 - `replace_sensitive` —— 手动清洗任意文本；`provider` / `model` 缺省只套全局规则，指定时叠加对应专属规则；返回清洗后文本、替换计数与命中明细（`hits`）。
@@ -312,10 +350,13 @@ ruleHits: [ { n: 3, scope: 'providers.deepseek-official/models.deepseek-flash', 
 | autoReplace | boolean | true | 进上下文前自动替换（`agent/pre-step` + `tools/post-execute`） |
 | dispatchScrub | boolean | true | **出网前清洗整份请求**（深拷贝后替换，含历史 / 模型输出 / tool-call 参数 / system） |
 | detectUnfiltered | boolean | true | 未开启 `dispatchScrub` 时的只读扫描：仍有命中就记警告 |
-| recoverOn400 | boolean | true | 400 时开启加硬清洗并 `retry`（对话保持连续） |
-| aggressiveMs | number | 600000 | 加硬清洗持续时长（ms） |
-| aggressive | boolean | false | 常开加硬清洗（不等 400 也额外剥离 emoji / 符号） |
-| maxRecoveries | number | 2 | 10 分钟窗口内最多自动重试几次（防 400 循环） |
+| recoverOn400 | boolean | true | 400 时记录读数（`last400`）；是否顺手重试由 `stripEmojiOn400` 决定 |
+| stripEmojiOn400 | boolean | **false** | 允许加硬重试：只给**那一次** 400 的请求打标（按 `signal`），重试时额外剥离 emoji / 符号并**命中即销**。会污染模型上下文（占位符被照抄），默认关 |
+| notifyReplaced | boolean | true | 真的替换过时，往请求末尾追加一条给模型看的说明："占位符不是原文，别照抄进文件" |
+| fixLoneSurrogates | boolean | true | 出网前把字符串里的**孤立代理项**（半个 UTF-16 代理对）换成 U+FFFD。不修的话 provider 会把整条请求判成「非法 JSON」（`unexpected end of hex escape`）；`tool-call` 的 `arguments` 走 parse → 修 → 再序列化 |
+| aggressiveMs | number | 600000 | **已废弃**（没有窗口了）；保留字段只为旧配置不报错 |
+| aggressive | boolean | false | **已废弃**（常开剥离等于把 emoji 剥给所有请求）；保留字段只为旧配置不报错 |
+| maxRecoveries | number | 2 | 10 分钟窗口内最多重试几次（防 400 循环） |
 | blocklistPath | string | `$DSH_HOME/sensitive-blocklist.yaml` | 屏蔽表文档路径 |
 | createBlocklistIfMissing | boolean | true | 文件不存在时兜底创建空表模板（已存在绝不覆盖；失败只告警；空表=无规则） |
 | replaceWith | string | `[BLOCKED]` | 替换占位符——含 `{n}` 时按规则序号编号（便于还原），明示内容被屏蔽而非静默删除 |

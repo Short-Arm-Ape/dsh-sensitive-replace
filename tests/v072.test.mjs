@@ -75,15 +75,15 @@ test('render 仍然保留规则数，结构字段 blocklistExists 仍是布尔',
   }
 })
 
-test('版本号对齐：PLUGIN_VERSION 是 0.7.2，状态里也报这个版本', async () => {
+test('版本号对齐：PLUGIN_VERSION 是 0.7.5，状态里也报这个版本', async () => {
   const d = fixedDir()
   try {
     writeFileSync(d.path, 'global: []\nproviders: {}\n', 'utf8')
     const f = mount(d.path)
-    assert.equal(PLUGIN_VERSION, '0.7.2')
+    assert.equal(PLUGIN_VERSION, '0.7.5')
     const value = await f.status().execute({})
-    assert.equal(value.version, '0.7.2')
-    assert.ok(f.status().output.render({}, value)[0].text.startsWith('dsh-sensitive-replace v0.7.2：'))
+    assert.equal(value.version, '0.7.5')
+    assert.ok(f.status().output.render({}, value)[0].text.startsWith('dsh-sensitive-replace v0.7.5：'))
   } finally {
     d.cleanup()
   }

@@ -122,7 +122,7 @@ import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-ll
 export declare const name = "agent-sensitive-replace";
 export declare const inject: readonly ["tools"];
 /** 本构建版本，随 package.json 同步；经 sensitive_replace_status 暴露 */
-export declare const PLUGIN_VERSION = "0.7.1";
+export declare const PLUGIN_VERSION = "0.7.5";
 export interface Config {
     /** 插件总开关 */
     enabled: boolean;
@@ -138,11 +138,21 @@ export interface Config {
     scrubDurableRequests: boolean;
     /** 出网前只读扫描：未开启 dispatchScrub 时，仍有命中就记警告（不改写） */
     detectUnfiltered: boolean;
-    /** 400 自动恢复（v0.5.0）：捕获 400 后开启加硬清洗并重试一次，保持对话连续 */
+    /** 400 时记录读数（`last400`）；是否顺手重试由 stripEmojiOn400 决定 */
     recoverOn400: boolean;
-    /** 加硬清洗的持续时间（ms），超时自动关闭 */
+    /**
+     * v0.7.3/0.7.4：允许 400 之后**加硬重试**（额外剥离 emoji / 符号），默认关。
+     * 只作用于**那一次** 400 的请求（按 `signal` 一次性打标、命中即销），不跨会话、没有时间窗口；
+     * 且只对带 `error.message` 的 400 重试（没有 message 的多为请求体被拒，剥 emoji 救不了）。
+     */
+    stripEmojiOn400: boolean;
+    /** v0.7.4：真的替换过时，往请求末尾追加一条给模型看的说明（占位符不是原文、别照抄），默认开 */
+    notifyReplaced: boolean;
+    /** v0.7.5：出网前把字符串里的孤立代理项（半个 UTF-16 代理对）换成 U+FFFD，默认开 */
+    fixLoneSurrogates: boolean;
+    /** **已废弃**（v0.7.4 起没有窗口了）；保留字段只为旧配置不报错 */
     aggressiveMs: number;
-    /** 常开加硬清洗（不等 400 也额外剥离 emoji / 符号） */
+    /** **已废弃**（常开剥离等于把 emoji 剥给所有请求）；保留字段只为旧配置不报错 */
     aggressive: boolean;
     /** 滑动窗口内最多自动重试几次（防 400 循环） */
     maxRecoveries: number;
@@ -160,6 +170,9 @@ export declare const Config: z<Schemastery.ObjectS<{
     scrubDurableRequests: z<boolean, boolean>;
     detectUnfiltered: z<boolean, boolean>;
     recoverOn400: z<boolean, boolean>;
+    stripEmojiOn400: z<boolean, boolean>;
+    notifyReplaced: z<boolean, boolean>;
+    fixLoneSurrogates: z<boolean, boolean>;
     aggressiveMs: z<number, number>;
     aggressive: z<boolean, boolean>;
     maxRecoveries: z<number, number>;
@@ -173,6 +186,9 @@ export declare const Config: z<Schemastery.ObjectS<{
     scrubDurableRequests: z<boolean, boolean>;
     detectUnfiltered: z<boolean, boolean>;
     recoverOn400: z<boolean, boolean>;
+    stripEmojiOn400: z<boolean, boolean>;
+    notifyReplaced: z<boolean, boolean>;
+    fixLoneSurrogates: z<boolean, boolean>;
     aggressiveMs: z<number, number>;
     aggressive: z<boolean, boolean>;
     maxRecoveries: z<number, number>;
@@ -266,6 +282,15 @@ export declare function scrubRequest(options: GenerateOptions, rules: string[], 
     options: GenerateOptions;
     count: number;
 };
+/** v0.7.5：把字符串里的孤立代理项（半个 UTF-16 代理对）换成 U+FFFD */
+export declare function toWellFormedString(text: string): string;
+/** v0.7.5：整份请求的 well-formed 兜底（messages 全部嵌套字段 + system）；无命中时返回原引用 */
+export declare function fixLoneSurrogates(options: GenerateOptions): {
+    options: GenerateOptions;
+    count: number;
+};
+/** v0.7.4：替换发生时在批次末尾追加一条给模型看的说明（count=0 时原样返回） */
+export declare function appendReplacementNotice(options: GenerateOptions, count: number, replaceWith: string): GenerateOptions;
 /** 非原地替换一条消息：无命中返回原消息（同一引用），有命中返回保留 id 的新冻结消息 */
 export declare function replaceMessageCopy<T extends Message>(msg: T, rules: string[], replaceWith: string, opts?: {
     toolCallArguments?: boolean;

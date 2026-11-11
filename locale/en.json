@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Sensitive Text Replacer",
+    "description": "Swaps sensitive characters for placeholders per your blocklist — before they enter context and before the request leaves — and repairs half surrogate pairs that would otherwise break a whole request."
+  }
+}

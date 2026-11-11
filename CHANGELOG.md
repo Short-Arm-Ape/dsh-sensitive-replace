@@ -1,5 +1,71 @@
 # dsh-sensitive-replace — 变更记录
 
+## v0.7.5（出网前修掉孤立代理项 —— 它会让整条请求被判「非法 JSON」）
+
+2026-11-11 抓包实证：某个会话从 turn 243 起**每一轮**都 400，重启无效。给 DeepSeek 适配器临时加日志后
+拿到 provider 原文：
+
+```
+Failed to parse the request body as JSON:
+messages[13].content[5].input.aliases[2]: unexpected end of hex escape
+```
+
+247,490 B 的请求体里**只有一处**孤立代理项：`input.aliases[2]` 末尾那个 U+D83D。来源是模型写
+`remember` 参数时写了 `\ud83d`——本意 6 个字符，JSON 一解码变成半个代理对；这段参数文本躺在会话日志里，
+之后每一轮都被重放。
+
+**屏蔽词规则永远拦不到它**：规则拿正则匹配文本，而文本上 `\ud83d` 就是 6 个完全合法的字符。
+
+1. **新增 `fixLoneSurrogates`（默认开）**：出网前把请求里所有字符串的孤立代理项换成 U+FFFD。
+   `tool-call` 的 `arguments` 是**原始 JSON 文本**，所以对它做 parse → 修 → 再序列化
+   （文本层看不出毒，只有 parse 之后才现形）。
+2. **零拷贝**：没有毒时返回原引用，不改一个字节、不增加开销。
+3. `sensitive_replace_status` 增加 `fixLoneSurrogates` 与 `wellFormedFixes`（累计修了几处）。
+4. 新增 `tests/v075.test.mjs`（6 条）：三种代理形态、tool-call 参数修完仍是合法 JSON、
+   文本块/嵌套 tool-result/system、出网整合、干净请求零拷贝、开关关闭。
+5. **插件列表的显示元数据**（同批带上）：`package.json` 加顶层 `icon`（`icon.svg`）与
+   `exports["./locale/*.json"]`，新增 `locale/en.json` / `locale/zh.json`
+   （`meta.title` / `meta.description`）。DSH 的 `readPluginMeta` 按界面语言取标题与简介，
+   找不到就退回技术名与那串很长的 npm description —— 加之前列表里显示的就是
+   `dsh-sensitive-replace` + 整段 description、没有图标。配套 `tests/manifest.test.mjs`（3 条）
+   把图标规格（SVG / 包内 / ≤256 KiB / 无外部引用）与 locale 契约钉住。全量 **81 条**。
+
+## v0.7.4（加硬只作用于那一次重试；替换时给模型一句交代）
+
+0.7.3 把「剥 emoji」默认关掉了，但机制上还是**全局时间窗口**：任何一个会话撞 400，接下来 10 分钟里
+**所有会话**的 emoji 都会被换成 `[BLOCKED]`。2026-11-11 的实测就是这个形态——一次会话的 400，
+让全库累计替换 8071 处，模型把占位符抄进了文档。
+
+这一版改成「按请求」：
+
+1. **400 只给那一次请求打标**：用 `agent/request-error` 载荷里的 `signal` 认人（`llm/stream` 的
+   `options.signal` 与它是同一个对象，`dsh-agent-loop` 的 `buildRequest` 把它写进了请求），
+   `llm/stream` 命中即销。**没有时间窗口**，不跨会话、不跨步。
+2. **只在 400 带 `error.message` 时才重试**：没有 message 的 `INVALID_REQUEST`（请求体被拒）剥 emoji
+   救不了，重发只是把同一份请求再打一遍。
+3. **替换真的发生时，往请求末尾追加一条说明**（`notifyReplaced`，默认开）：讲清「上下文里的占位符不是
+   原文，写文件或回复时别照抄」。只给模型看——清洗只作用于出网副本，工具拿到的是模型的真参数。
+4. `aggressive` / `aggressiveMs` 废弃（保留字段只为旧配置不报错）：常开剥离等于把 emoji 剥给所有请求。
+5. 新增 `tests/v074.test.mjs`（9 条）：一次性打标、跨会话隔离（B 会话请求字节级不变）、无 message 不重试、
+   无 signal 不重试、说明注入的三种情形、纯函数冻结、状态行。v073 收窄成 4 条，全量 **72 条**。
+
+## v0.7.3（400 之后不再顺手剥 emoji）
+
+2026-11-11 用户报告：**写文档的时候 emoji 被换成 `[BLOCKED]`**。
+
+链条是这样：模型返回 400 → 插件开一个 10 分钟的「加硬清洗」窗口 → 窗口里把 emoji / 符号 /
+变体选择符 / ZWJ 换成**可见**占位符 `[BLOCKED]`。问题在于模型拿到的上下文就是替换后的样子，
+于是它之后写文档、写回复时会把占位符照抄进去。而且它救不了 `INVALID_REQUEST` 这类 400
+（那不是内容风控，是请求体被拒），只是白白多打两次同样的请求。
+
+1. **加硬剥离改成显式开关** `stripEmojiOn400`，默认**关**。关着的时候 emoji 原样出网。
+2. **关着的时候 400 不再自动重试**：同一份请求重发只会再吃一次同样的 400；现在只记一条
+   warn，把「要不要把触发内容加进屏蔽表」交回给人。
+3. `sensitive_replace_status` 多报一个 `stripEmojiOn400`；`aggressive` 改成反映**有效**状态
+   （开关没开时恒为 false，不再出现「显示进行中但其实不会剥」）。
+4. 新增 `tests/v073.test.mjs`（6 条）：默认值、默认路径不剥 emoji、显式打开才剥、
+   400 钩子的两种行为、纯函数对照。
+
 ## v0.7.2（状态行显示屏蔽表是否存在）
 
 0.7.1 把 `blocklistExists` 加进了 `sensitive_replace_status` 的**结构化输出**，但那一行中文
